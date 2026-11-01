@@ -1,0 +1,7 @@
+{
+  "screenshot_days": 30,
+  "installer_days": 60,
+  "vscode_cache_days": 30,
+  "large_support_gb": 1,
+  "homebrew_prune_days": 30
+}

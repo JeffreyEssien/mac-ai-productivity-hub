@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleDisplayName</key><string>Mac AI Productivity Hub</string>
+  <key>CFBundleExecutable</key><string>MacAIHub</string>
+  <key>CFBundleIdentifier</key><string>com.local.macproductivityhub</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>Mac AI Productivity Hub</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.3.1</string>
+  <key>CFBundleVersion</key><string>4</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSRemindersFullAccessUsageDescription</key>
+  <string>Show and manage your existing reminders, task deadlines and completion status using your own iCloud account.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>Show and edit your reminders without making duplicate task copies.</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>com.local.macproductivityhub.url</string>
+      <key>CFBundleURLSchemes</key>
+      <array><string>macaihub</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
