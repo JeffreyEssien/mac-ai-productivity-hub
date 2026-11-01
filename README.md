@@ -1,71 +1,163 @@
-# Mac AI Productivity Hub — v0.3 AppKit edition
+# Mac AI Productivity Hub
 
-A native macOS task and storage dashboard for Apple Silicon Macs. AppKit replaces the prior SwiftUI interface to avoid `SwiftUIMacros` compilation failure on Command Line Tools-only installations.
+A native macOS menu-bar and desktop app that turns Apple Reminders into a focused task dashboard. It also includes a set of Python command-line tools for daily planning, Mac health checks and careful storage cleanup.
 
-**Start here:** [NATIVE_APP_SETUP.md](NATIVE_APP_SETUP.md).
+Everything runs on your Mac. Tasks live in your existing iCloud Reminders, so changes made in the Hub show up on your iPhone and the other way round. There's no separate database, no account and no network AI calls.
 
-This project bundles the existing Python storage manager, productivity tooling, and test suite without modifying your previously scheduled `launchd` jobs. The task dashboard uses EventKit to manage your real Apple Reminders lists with a graphical date/time picker, editing, completion, search and sorting. iPhone reminders synchronize via iCloud; iPhone Shortcuts run independently of the Mac.
+![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey) ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-blue) ![Swift](https://img.shields.io/badge/Swift-AppKit-orange) ![Python](https://img.shields.io/badge/Python-3%20stdlib-yellow) ![Version](https://img.shields.io/badge/version-0.3.1-green)
 
-The on-device/macOS build is not verified until you run `./native/install_mac_app.sh` on your Mac. This version does not embed an Apple Intelligence model; any previously configured Mac AI Shortcuts remain separate.
+## Features
 
-## v0.3.1 compiler compatibility fix
+**Native app (Swift + AppKit + EventKit)**
 
-Updated AppKit entry point for Swift 6 actor isolation, explicitly unwrapped
-initialized views, and handled optional reminder titles. No existing
-Apple Reminders lists or scheduled Python jobs are modified by installation.
+- **Task dashboard** with tabs for All Open, Today, Overdue, Upcoming, No Due Date and Completed, sorted by due date and time.
+- **Add and edit reminders** with Apple's native date/time picker and quick buttons for Today, Tomorrow and Next Week. You can choose any of your Reminders lists.
+- **Complete, search and snooze** reminders (+1 day or +1 week).
+- **Menu-bar icon** that shows live counts of open and overdue tasks.
+- **Mac Health** panel with a read-only snapshot of RAM, CPU, swap and disk use.
+- **Duplicate protection**: it won't create a second incomplete reminder with the same title in the same list.
+- **URL scheme** that opens a specific tab: `open macaihub://overdue` (also `today`, `upcoming`, `nodue`, `completed`, `all`).
+
+**Python command-line tools (standard library only)**
+
+- `ai_hub.py`: Reminders assistant with natural-language task entry ("call the dentist next tuesday at 3pm"), daily check-ins and a health check (`doctor`).
+- `productivity_manager.py`: syncs a planning note in Apple Notes to Apple Reminders. It can also sync back, marking a task done in the note when it's completed on your phone.
+- `storage_manager.py`: a careful storage cleaner. It reports first and asks you to approve each item before deleting anything. It also keeps a free-space history.
+- `performance_monitor.py`: read-only RAM, swap, disk and process diagnostics.
+
+Natural-language entry and briefings can optionally use on-device **Apple Intelligence Shortcuts**. If no Shortcut is set up, they fall back to a built-in local parser.
+
+## Requirements
+
+- A Mac with Apple Silicon (M1 or later)
+- macOS 14 Sonoma or later
+- Apple Command Line Tools (full Xcode is **not** needed):
+  ```bash
+  xcode-select --install
+  ```
+- Python 3, which ships with the Command Line Tools (only needed for the CLI tools and the Mac Health panel)
+
+## Installation
+
+1. **Clone the repo**
+   ```bash
+   git clone https://github.com/JeffreyEssien/mac-ai-productivity-hub.git
+   cd mac-ai-productivity-hub
+   ```
+
+2. **Build and install the app**
+   ```bash
+   chmod +x native/install_mac_app.sh
+   ./native/install_mac_app.sh
+   ```
+   The script compiles the Swift source with `swiftc`, bundles the Python tools into the app, signs it locally (ad hoc) and installs it to `~/Applications/Mac AI Productivity Hub.app`. If an older copy is already there, it's renamed to a timestamped backup first.
+
+3. **Launch it**
+   ```bash
+   open "$HOME/Applications/Mac AI Productivity Hub.app"
+   ```
+
+4. **Allow Reminders access** when macOS asks. Your existing iCloud Reminders lists will appear in the app.
+
+5. *(Optional)* Keep it in the Dock, or open it automatically at login under **System Settings → General → Login Items & Extensions**.
+
+For everyday use, troubleshooting and details on what the installer changes, see [NATIVE_APP_SETUP.md](NATIVE_APP_SETUP.md).
+
+### Uninstall
+
+Quit the app, then move `~/Applications/Mac AI Productivity Hub.app` to the Trash. Your reminders aren't affected. Running `./native/uninstall_mac_app.sh` shows you where the app is installed.
+
+### Using only the Python tools
+
+You don't need to build the app to use the CLI tools. Run them directly from the repo:
+
+```bash
+python3 ai_hub.py list
+python3 storage_manager.py scan
+python3 performance_monitor.py
+```
 
 ## Command reference
 
-All Python tools are stdlib-only and macOS-only for their Apple integrations.
-Scheduled/headless runs stay read-only; anything that writes is interactive or
-requires an explicit `--apply`/`--execute` flag.
+Background (scheduled) runs only read data. Any command that changes something is either interactive or needs an explicit `--apply`/`--execute` flag.
 
-### `ai_hub.py` — text-first Apple Reminders assistant
+### `ai_hub.py`: Apple Reminders assistant
 
 | Command | What it does |
 |---------|--------------|
 | `list` | Print a prioritized brief of open reminders (overdue / today / upcoming / no due date). |
 | `add` | Interactively add a reminder via native dialogs. |
-| `add-nl "<phrase>"` | Create a reminder from natural language (e.g. `"call the dentist next tuesday at 3pm"`). Routes the phrase to an on-device Apple Intelligence Shortcut (`--shortcut`, default `Mac AI Task Parser`) and falls back to a built-in local parser. Use `--local` to force local parsing with no Shortcut. |
+| `add-nl "<phrase>"` | Create a reminder from natural language. Uses an Apple Intelligence Shortcut (`--shortcut`, default `Mac AI Task Parser`) if available, otherwise the built-in local parser. `--local` forces local parsing. |
 | `ai-brief` | Run an Apple Intelligence Shortcut (`--shortcut`, default `Mac AI Task Briefing`) over your tasks on-device. |
 | `checkin <morning\|midday\|evening>` | Print a read-only check-in; `--notify` also posts a macOS notification. |
 | `diagnose` | Read-only disk/swap/memory snapshot. |
-| `doctor` | Health check: config validity, Reminders access, which scheduled agents are installed/loaded, and recent errors. |
-| `install` / `uninstall` | Add or remove the read-only scheduled check-in `launchd` agents. |
+| `doctor` | Health check: config, Reminders access, installed/loaded scheduled agents and recent errors. |
+| `install` / `uninstall` | Add or remove the scheduled check-in `launchd` agents. |
 
-Natural-language entry and briefings use on-device Apple Intelligence Shortcuts
-only — there are no network AI calls.
-
-### `productivity_manager.py` — iCloud Notes → Apple Reminders planner
+### `productivity_manager.py`: Apple Notes → Apple Reminders planner
 
 | Command | What it does |
 |---------|--------------|
 | `scan` | Preview tasks parsed from the planning note (read-only). |
 | `sync` | Create/update reminders from the note. Preview by default; add `--apply` to write. |
-| `reflect` | Reverse sync: mark a note task `DONE` when the matching reminder has been completed (e.g. on iPhone). Only ever flips `OPEN → DONE`; preview by default, `--apply` to write. |
+| `reflect` | Reverse sync: mark a note task `DONE` when its reminder has been completed (e.g. on iPhone). Only ever changes `OPEN → DONE`. Preview by default; `--apply` to write. |
 | `prompt <morning\|evening>` | Show the daily planning dialog (open the note / sync now). |
-| `install` / `uninstall` | Add or remove the planner `launchd` agents and the double-clickable sync launcher app. |
+| `install` / `uninstall` | Add or remove the planner `launchd` agents and the double-clickable sync launcher. |
 
-Task lines use the format `TASK-xxxx | Title | YYYY-MM-DD HH:MM | OPEN|DONE`
-(the `TASK-` prefix is case-insensitive). A persistently failing headless sync
-posts a macOS notification instead of failing silently.
+Task lines in the note use this format:
 
-### `storage_manager.py` — conservative storage report/cleanup
+```
+TASK-0001 | Review deployment | 2026-10-12 10:30 | OPEN
+```
+
+### `storage_manager.py`: storage report and cleanup
 
 | Command | What it does |
 |---------|--------------|
-| `scan` | Read-only report of cleanup candidates and report-only storage. |
-| `execute` | Interactive, per-item approved cleanup (TTY required); `--approve-native` also offers `pip`/Homebrew cleanup. |
-| `trend` | Show recorded free-space history over time and the net change across the window. |
+| `scan` | Read-only report of cleanup candidates. |
+| `execute` | Interactive cleanup where you approve each item (needs a terminal). `--approve-native` also offers `pip`/Homebrew cleanup. |
+| `trend` | Show free-space history and the net change over time. |
 | `install` / `uninstall` | Add or remove the daily read-only scan `launchd` agent (`--hour`). |
 
-Each `scan`/`execute` appends a row to `~/.mac-storage-manager/history.jsonl`
-(capped at 500 rows) that `trend` reads.
+Each `scan`/`execute` adds a row to `~/.mac-storage-manager/history.jsonl` (the file keeps at most 500 rows).
 
-### Native AppKit app
+## Configuration
 
-Beyond add/edit/complete/search/sort with a graphical date picker, the app adds
-**Snooze +1 day / +1 week** on the selected reminder, **live open/overdue counts**
-in the menu-bar icon, and a `macaihub://` URL scheme that opens the app to a
-specific tab — `macaihub://overdue` (also `today`, `upcoming`, `nodue`,
-`completed`, `all`), e.g. `open macaihub://overdue`.
+| File | Used by | Settings |
+|------|---------|----------|
+| `hub_config.json` | `ai_hub.py` | Reminders list name and check-in times |
+| `productivity_config.json` | `productivity_manager.py` | Planning note title, Reminders list, prompt times |
+| `config.json` | `storage_manager.py` | Age thresholds for screenshots, installers, caches and Homebrew |
+
+## Project structure
+
+```
+├── native/
+│   ├── AppKit/MacAIHub.swift   # Native app (AppKit + EventKit)
+│   ├── Info.plist              # App bundle metadata and URL scheme
+│   ├── install_mac_app.sh      # Build, sign and install script
+│   └── uninstall_mac_app.sh
+├── ai_hub.py                   # Reminders assistant CLI
+├── productivity_manager.py     # Notes → Reminders planner
+├── storage_manager.py          # Storage report and cleanup
+├── performance_monitor.py      # Read-only system diagnostics
+├── *_config.json, config.json  # Settings
+└── test_*.py                   # Unit tests
+```
+
+## Running tests
+
+```bash
+python3 -m unittest discover
+```
+
+## Privacy and safety
+
+- All data stays on your Mac and in your own iCloud. The app makes no network calls.
+- The app reads and writes Apple Reminders only through Apple's EventKit framework, after you grant permission.
+- Nothing is deleted without your approval, and scheduled jobs never write.
+- The installer only touches `~/Applications/Mac AI Productivity Hub.app`. It doesn't change your `launchd` jobs, Notes, iCloud settings or Shortcuts.
+
+## Author
+
+Built by [Jeffrey Essien](https://github.com/JeffreyEssien).

@@ -1,75 +1,56 @@
-# Mac AI Productivity Hub v0.3 — AppKit edition
+# Native App Guide
 
-This is a **native Mac desktop and menu-bar app** that reads/writes your existing Apple Reminders through EventKit. It uses **AppKit, not SwiftUI** so it does not require the missing `SwiftUIMacros.StateMacro` plugin. It is distributed as source; it has **not** been compiled or permission-tested on your Mac, and your Apple Command Line Tools installation must support AppKit compilation.
+Mac AI Productivity Hub is a native Mac desktop and menu-bar app. It reads and writes your existing Apple Reminders through Apple's EventKit framework.
 
-## Installation on your Mac (Apple Silicon, macOS 14+)
+It's built with **AppKit rather than SwiftUI**, so it compiles with just Apple's Command Line Tools. You don't need full Xcode.
 
-1. Download and extract the ZIP to Desktop. The extracted project directory is `mac_ai_productivity_hub_appkit_v3`.
-2. Open Terminal **once** and run:
-
-   ```bash
-   cd "$HOME/Desktop/mac_ai_productivity_hub_appkit_v3"
-   chmod +x native/install_mac_app.sh
-   ./native/install_mac_app.sh
-   ```
-
-   If the extracted name differs, drag the folder from Finder into Terminal after typing `cd `.
-3. Open the installed app:
-
-   ```bash
-   open "$HOME/Applications/Mac AI Productivity Hub.app"
-   ```
-
-4. Grant macOS **Reminders** permission. Your existing iCloud lists, including `REMINDER`, will appear when adding a task. The app does not require or create `Mac Planner`.
-5. Optionally pin the app to the Dock. Its checklist icon should also appear in the Mac menu bar. To launch at login, add the `.app` via **System Settings → General → Login Items & Extensions**.
-
-> The AppKit source passes syntax parsing in the build environment, but it cannot be fully compiled against Apple's macOS SDK there. If your Mac reports a compiler error, send the **first error and 15 lines around it** so it can be corrected precisely. Please do not install full Xcode solely to fix the SwiftUI macro error until we test this replacement.
+For requirements and installation steps, see the [README](README.md#installation).
 
 ## Everyday use
 
-- **New Task:** Click **New Task** (or use the menu-bar icon), type a title, select one of your real Apple Reminders lists, check **Set due date** and optionally **Remind at a specific time**. Use **Today / Tomorrow / Next Week** buttons or choose a day and time from Apple's native picker.
-- **See tasks:** The dashboard shows **All Open, Today, Overdue, Upcoming, No Due Date, Completed**. It sorts by due date and time, and shows untimed tasks as dates rather than midnight.
-- **Edit task:** Select a row and click **Edit Selected**, or double-click it. This updates the original reminder using its native EventKit identifier.
-- **Complete task:** Select a row and click **Toggle Complete**. Changes appear on your iPhone after iCloud sync.
-- **Diagnostics:** Click **Mac Health** to run read-only RAM/CPU/swap and storage inspections. Any cleanup still requires manual approval through the original Python tool.
-- **Open Apple's Reminders:** Use the dedicated button when you want its own full editing experience.
+- **New task:** click **New Task** (or use the menu-bar icon) and type a title. Then pick one of your Reminders lists. To set a due date, check **Set due date** and, if you want, **Remind at a specific time**. Use the **Today / Tomorrow / Next Week** buttons or choose a day and time from Apple's date picker.
+- **View tasks:** switch between **All Open, Today, Overdue, Upcoming, No Due Date** and **Completed**. Tasks are sorted by due date and time. Tasks without a time show only their date.
+- **Edit a task:** select a row and click **Edit Selected**, or double-click the row. This updates the original reminder.
+- **Complete a task:** select a row and click **Toggle Complete**. The change reaches your iPhone through iCloud.
+- **Snooze:** **Snooze +1 day** or **Snooze +1 week** moves the selected reminder's due date.
+- **Mac Health:** shows a read-only snapshot of RAM, CPU, swap and storage. Any cleanup still goes through `storage_manager.py`, which asks before deleting anything.
+- **Open Reminders:** opens Apple's Reminders app when you want its full editor.
+- **Deep links:** `open macaihub://today` opens the app on a specific tab. The other tabs are `overdue`, `upcoming`, `nodue`, `completed` and `all`.
 
-The app does **not** provide Apple Intelligence analysis directly; Mac AI Shortcuts from the prior package remain separate. Existing iPhone Quick Add Task and Daily Task Review Shortcuts continue independently while the Mac is off.
+## Syncing and duplicates
 
-## Duplicate protection and synchronization
+The Hub works directly with your iCloud Reminders and doesn't keep a copy of its own. Edits and completions target each reminder by its EventKit ID.
 
-The same iCloud Reminders records are shared between Mac and iPhone, not copied into a second database. The app prevents creating an **incomplete reminder with the same normalized title in the same list** when already fetched. Edits and completion use EventKit identifiers. This avoids ordinary duplication, **but is not an atomic cross-device guarantee**: pending iCloud writes, differently worded tasks, and simultaneous offline creation can still produce duplicates. Check iCloud Reminders on the Mac before creating a reminder you have just entered on an offline iPhone.
+To avoid duplicates, the app won't create an incomplete reminder whose title matches one already in the same list. This isn't a full guarantee across devices, though. Pending iCloud changes, slightly different wording, or tasks created on an offline iPhone at the same time can still produce duplicates.
 
-Do **not** re-enable an older *Notes-to-Reminders automatic creation* schedule at the same time. If your previous `productivity_manager.py` is scheduled to create reminders, disable that particular schedule with its own `uninstall` command from the **original** project folder; this will not delete your reminders. The Mac and iPhone read-only daily briefing schedules can remain running.
+If you also use `productivity_manager.py` to create reminders from an Apple Notes planning note on a schedule, keep in mind that both tools can create reminders. To turn off that schedule, run `python3 productivity_manager.py uninstall`. Your reminders won't be deleted.
 
-## What installation changes
+## What the installer changes
 
-- It compiles and installs only `~/Applications/Mac AI Productivity Hub.app`.
-- If an older version of the `.app` exists, it is renamed to a timestamped backup under `~/Applications`.
-- It does **not** change your active launchd jobs, Apple Reminders, iCloud settings, Notes, or iPhone Shortcuts.
-- It does not clear memory, delete project files, or delete caches in the background.
-- The app is signed locally *ad hoc*. Depending on your macOS privacy settings, a rebuilt binary may require allowing Reminders access again.
+- It builds and installs only `~/Applications/Mac AI Productivity Hub.app`.
+- If an older copy is already there, it's renamed to a timestamped backup in `~/Applications`.
+- It does **not** change `launchd` jobs, Apple Reminders, iCloud settings, Notes or Shortcuts.
+- The app is signed ad hoc on your Mac. After you rebuild it, macOS may ask for Reminders access again.
+- To sign with your own identity, set `MAC_HUB_SIGN_IDENTITY` before running the installer.
 
 ## Troubleshooting
 
-- **Compiler failure:** Run `xcode-select -p`, `xcrun swiftc --version`, `xcrun --sdk macosx --show-sdk-path`; share the **first new error**. This build intentionally does **not** import SwiftUI.
-- **Permissions:** System Settings → Privacy & Security → Reminders → enable **Mac AI Productivity Hub**.
-- **Missing new iPhone tasks:** Open the actual Reminders app on Mac, wait for iCloud changes to appear, then click **Refresh** in the Hub.
-- **Duplicate or overdue issues in older Python CLI:** The old CLI is a separate code path; use the new dashboard, which reads EventKit date components and handles date-only tasks correctly.
-- **No diagnostic output:** Confirm `python3 --version`; task management works without Python being in the application PATH.
+- **Compiler errors:** check your toolchain with:
+  ```bash
+  xcode-select -p
+  xcrun swiftc --version
+  xcrun --sdk macosx --show-sdk-path
+  ```
+  If the SDK path is missing, reinstall the tools with `xcode-select --install`.
+- **Reminders permission:** go to System Settings → Privacy & Security → Reminders and turn on **Mac AI Productivity Hub**.
+- **New iPhone tasks not showing:** open Apple's Reminders app on the Mac and wait for iCloud to sync. Then click **Refresh** in the Hub.
+- **Mac Health shows no output:** make sure `python3 --version` works. Task management doesn't need Python.
 
 ## Uninstall
 
-Quit the app and move `~/Applications/Mac AI Productivity Hub.app` to Trash. Remove it from Login Items if added. This does not delete tasks or disable separate Python schedules.
+Quit the app and move `~/Applications/Mac AI Productivity Hub.app` to the Trash. If you added it to Login Items, remove it there too. Uninstalling doesn't delete your reminders or turn off any Python schedules you installed separately.
 
-## Swift 6 / AppKit build update (v0.3.1)
+## Changelog
 
-This revision fixes Swift 6 errors for the `@MainActor` delegate initializer,
-optional `NSView` values in the view array, and optional reminder titles. The
-installer compiles with `-parse-as-library` for the explicit `@main` entry point.
-The app still requires a local Mac build with Apple's Command Line Tools;
-this package was not compiled against a macOS SDK in the packaging environment.
-
-If you want to fix an already extracted v0.3 copy, overwrite the two files
-`native/AppKit/MacAIHub.swift` and `native/install_mac_app.sh` with their v0.3.1
-versions, then rerun `./native/install_mac_app.sh`.
+- **0.3.1:** Fixed Swift 6 errors (main-actor isolation of the app delegate, optional views and optional reminder titles). The installer now compiles with `-parse-as-library` for the `@main` entry point.
+- **0.3.0:** Rewrote the interface in AppKit instead of SwiftUI, so it builds on Command Line Tools without full Xcode.
