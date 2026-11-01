@@ -83,6 +83,19 @@ class NativePackageTests(unittest.TestCase):
         schemes = info['CFBundleURLTypes'][0]['CFBundleURLSchemes']
         self.assertIn('macaihub', schemes)
 
+    def test_ai_not_assumed_configured_and_rules_fallback(self):
+        source = APPKIT.read_text()
+        self.assertIn('service(["ai_status"])', source)
+        self.assertIn('showBasicPlan()', source)
+        self.assertIn('showAISetup(', source)
+        self.assertIn('RULES-BASED REVIEW (no AI model was used)', source)
+
+    def test_cleanup_still_requires_explicit_gui_confirmation(self):
+        source = APPKIT.read_text()
+        self.assertIn('check.state = .off', source)
+        self.assertIn('confirm.runModal()', source)
+        self.assertIn('service(["trash", token])', source)
+
     def test_no_swiftui_framework_or_macros(self):
         source = APPKIT.read_text()
         self.assertNotIn('import SwiftUI', source)

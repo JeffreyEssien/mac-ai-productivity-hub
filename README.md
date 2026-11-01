@@ -2,19 +2,23 @@
 
 A native macOS menu-bar and desktop app that turns Apple Reminders into a focused task dashboard. It also includes a set of Python command-line tools for daily planning, Mac health checks and careful storage cleanup.
 
-Everything runs on your Mac. Tasks live in your existing iCloud Reminders, so changes made in the Hub show up on your iPhone and the other way round. There's no separate database, no account and no network AI calls.
+Everything runs on your Mac. Tasks live in your existing iCloud Reminders, so changes made in the Hub show up on your iPhone and the other way round. There's no separate database and no account. The app itself makes no network calls. AI features go through a Shortcut you set up yourself, and you choose its model.
 
-![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey) ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-blue) ![Swift](https://img.shields.io/badge/Swift-AppKit-orange) ![Python](https://img.shields.io/badge/Python-3%20stdlib-yellow) ![Version](https://img.shields.io/badge/version-0.3.1-green)
+![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey) ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-blue) ![Swift](https://img.shields.io/badge/Swift-AppKit-orange) ![Python](https://img.shields.io/badge/Python-3%20stdlib-yellow) ![Version](https://img.shields.io/badge/version-0.5.0-green)
 
 ## Features
 
 **Native app (Swift + AppKit + EventKit)**
 
-- **Task dashboard** with tabs for All Open, Today, Overdue, Upcoming, No Due Date and Completed, sorted by due date and time.
+- **Dashboard** with overview cards for open tasks, overdue tasks, tasks due today and free storage. A "Your next step" card points out the most urgent task.
+- **Task list** with views for All Open, Today, Overdue, Upcoming, No Due Date and Completed, sorted by due date and time.
 - **Add and edit reminders** with Apple's native date/time picker and quick buttons for Today, Tomorrow and Next Week. You can choose any of your Reminders lists.
 - **Complete, search and snooze** reminders (+1 day or +1 week).
 - **Menu-bar icon** that shows live counts of open and overdue tasks.
-- **Mac Health** panel with a read-only snapshot of RAM, CPU, swap and disk use.
+- **Today's Plan**: a date-sorted plan of your open tasks. If you set up an Apple Intelligence Shortcut, it can generate a written plan instead, but only after asking before it sends your task titles.
+- **Desktop Companion**: a small floating panel with your counts, your next task and quick actions.
+- **Review Cleanup**: lists old screenshots, installers and VS Code caches, all unchecked. Anything you pick goes to the Trash after a second confirmation. Nothing is permanently deleted.
+- **Mac Health**: a plain-language report on free space, memory, swap and the apps using the most memory.
 - **Duplicate protection**: it won't create a second incomplete reminder with the same title in the same list.
 - **URL scheme** that opens a specific tab: `open macaihub://overdue` (also `today`, `upcoming`, `nodue`, `completed`, `all`).
 
@@ -25,7 +29,9 @@ Everything runs on your Mac. Tasks live in your existing iCloud Reminders, so ch
 - `storage_manager.py`: a careful storage cleaner. It reports first and asks you to approve each item before deleting anything. It also keeps a free-space history.
 - `performance_monitor.py`: read-only RAM, swap, disk and process diagnostics.
 
-Natural-language entry and briefings can optionally use on-device **Apple Intelligence Shortcuts**. If no Shortcut is set up, they fall back to a built-in local parser.
+The app and these tools share `hub_services.py`, which gives the app JSON data for Mac Health, cleanup and AI status.
+
+AI features are optional and use **Apple Intelligence Shortcuts** that you create in the Shortcuts app; see [AI setup](NATIVE_APP_SETUP.md#ai-setup-optional). Without them, the app shows a basic plan, and natural-language entry uses a built-in local parser.
 
 ## Requirements
 
@@ -141,6 +147,7 @@ Each `scan`/`execute` adds a row to `~/.mac-storage-manager/history.jsonl` (the 
 ├── productivity_manager.py     # Notes → Reminders planner
 ├── storage_manager.py          # Storage report and cleanup
 ├── performance_monitor.py      # Read-only system diagnostics
+├── hub_services.py             # JSON bridge for the app (health, cleanup, AI)
 ├── *_config.json, config.json  # Settings
 └── test_*.py                   # Unit tests
 ```
@@ -153,9 +160,9 @@ python3 -m unittest discover
 
 ## Privacy and safety
 
-- All data stays on your Mac and in your own iCloud. The app makes no network calls.
+- Your data stays on your Mac and in your own iCloud. The app makes no network calls of its own. Before Today's Plan sends task titles, due dates and list names to your Shortcut, the app asks first. Choose the On-Device model in that Shortcut to keep processing on your Mac.
 - The app reads and writes Apple Reminders only through Apple's EventKit framework, after you grant permission.
-- Nothing is deleted without your approval, and scheduled jobs never write.
+- Nothing is deleted without your approval. Files from the app's cleanup go to the Trash, which the app never empties. Scheduled jobs never write anything.
 - The installer only touches `~/Applications/Mac AI Productivity Hub.app`. It doesn't change your `launchd` jobs, Notes, iCloud settings or Shortcuts.
 
 ## Author

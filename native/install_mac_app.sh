@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds an AppKit macOS menu-bar + window app using only Apple Command Line Tools.
+# Builds the native AppKit macOS hub using Apple Command Line Tools.
 # No SwiftUI macros or full Xcode required. Does not alter launchd jobs or reminders.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,7 +22,7 @@ echo "Compiling AppKit (no SwiftUI/macros)…"
   -framework Foundation -framework AppKit -framework EventKit \
   "$ROOT/native/AppKit/MacAIHub.swift" \
   -o "$APP/Contents/MacOS/MacAIHub"
-for f in ai_hub.py storage_manager.py productivity_manager.py performance_monitor.py hub_config.json config.json productivity_config.json; do
+for f in ai_hub.py storage_manager.py productivity_manager.py performance_monitor.py hub_services.py hub_config.json config.json productivity_config.json; do
   [[ -f "$ROOT/$f" ]] && cp "$ROOT/$f" "$APP/Contents/Resources/Backend/$f"
 done
 chmod 755 "$APP/Contents/MacOS/MacAIHub"

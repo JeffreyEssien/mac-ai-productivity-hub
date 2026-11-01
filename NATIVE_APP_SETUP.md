@@ -9,13 +9,44 @@ For requirements and installation steps, see the [README](README.md#installation
 ## Everyday use
 
 - **New task:** click **New Task** (or use the menu-bar icon) and type a title. Then pick one of your Reminders lists. To set a due date, check **Set due date** and, if you want, **Remind at a specific time**. Use the **Today / Tomorrow / Next Week** buttons or choose a day and time from Apple's date picker.
+- **Overview:** the cards at the top show open tasks, overdue tasks, tasks due today and free storage. The "Your next step" card shows the most urgent task.
 - **View tasks:** switch between **All Open, Today, Overdue, Upcoming, No Due Date** and **Completed**. Tasks are sorted by due date and time. Tasks without a time show only their date.
 - **Edit a task:** select a row and click **Edit Selected**, or double-click the row. This updates the original reminder.
 - **Complete a task:** select a row and click **Toggle Complete**. The change reaches your iPhone through iCloud.
 - **Snooze:** **Snooze +1 day** or **Snooze +1 week** moves the selected reminder's due date.
-- **Mac Health:** shows a read-only snapshot of RAM, CPU, swap and storage. Any cleanup still goes through `storage_manager.py`, which asks before deleting anything.
+- **Today's Plan:** click **View Today's Plan** for an overview grouped by what to do first, what's due today, what's later and what has no deadline. Without AI, choose **View Basic Plan**.
+- **Desktop Companion:** opens a small floating panel with your counts, your next task, free space and quick buttons. Drag it by its title bar, and close it any time.
+- **Review Cleanup:** shows old screenshots (30+ days), old installers (60+ days) and VS Code caches, all **unchecked**. Tick what to remove and confirm a second time. The files go to the Trash, which the app never empties. If a file changed after the scan, the app won't move it. Browser data, app support folders, projects and system files are never offered.
+- **Mac Health:** a plain-language report on free space, installed memory, swap use and the apps using the most memory. High swap use hints at memory pressure but doesn't prove it.
 - **Open Reminders:** opens Apple's Reminders app when you want its full editor.
 - **Deep links:** `open macaihub://today` opens the app on a specific tab. The other tabs are `overdue`, `upcoming`, `nodue`, `completed` and `all`.
+
+## AI setup (optional)
+
+The AI plan uses a Shortcut that you build once in the Shortcuts app. Your Mac needs Apple Intelligence turned on. The app's **AI Setup** button shows these same steps.
+
+1. Open **Shortcuts** and create a new shortcut named exactly **Mac Hub AI Plan**.
+2. Add **Get Text from Input**, with **Shortcut Input** as its source.
+3. Add **Use Model** and choose **On-Device** if it's available. Use a prompt like this:
+   ```text
+   Analyze the task list provided in the input. Write a concise plan in plain English:
+   1. Do first (overdue/time-sensitive)
+   2. Due today
+   3. Schedule later
+   4. Tasks without deadlines
+
+   Only use the dates, times and task titles in the input.
+   Do not invent missing dates, mark anything completed, or change reminders.
+   Return plain text.
+
+   TASKS:
+   [Get Text from Input variable]
+   ```
+4. Turn **Follow Up** off. Connect the model's **Response** to **Stop and Output**. Don't add Show Alert or Ask for Input.
+5. Test it in Shortcuts with a few sample tasks.
+6. In the Hub, open **View Today's Plan** → **Generate AI Plan**. The app asks before it shares your tasks.
+
+To check that the Shortcut is saved, run `shortcuts list | grep -F "Mac Hub AI Plan"`. The AI only gives suggestions: it can't edit reminders or delete files. Generating a plan can make the window pause briefly while the model runs.
 
 ## Syncing and duplicates
 
@@ -44,6 +75,7 @@ If you also use `productivity_manager.py` to create reminders from an Apple Note
   If the SDK path is missing, reinstall the tools with `xcode-select --install`.
 - **Reminders permission:** go to System Settings → Privacy & Security → Reminders and turn on **Mac AI Productivity Hub**.
 - **New iPhone tasks not showing:** open Apple's Reminders app on the Mac and wait for iCloud to sync. Then click **Refresh** in the Hub.
+- **AI plan fails:** check the Shortcut is named exactly **Mac Hub AI Plan** and ends with **Stop and Output**. A Shortcut that only shows text doesn't return anything to the app.
 - **Mac Health shows no output:** make sure `python3 --version` works. Task management doesn't need Python.
 
 ## Uninstall
@@ -52,5 +84,6 @@ Quit the app and move `~/Applications/Mac AI Productivity Hub.app` to the Trash.
 
 ## Changelog
 
+- **0.5.0:** Combined the 0.4.1 dashboard (overview cards, Today's Plan with optional AI, Desktop Companion, Review Cleanup and a plain-language Mac Health report) with the 0.3.x features (snooze, menu-bar counts, `macaihub://` links, crash-safe reminder titles, and the `doctor`, `add-nl`, `reflect` and `trend` CLI commands).
 - **0.3.1:** Fixed Swift 6 errors (main-actor isolation of the app delegate, optional views and optional reminder titles). The installer now compiles with `-parse-as-library` for the `@main` entry point.
 - **0.3.0:** Rewrote the interface in AppKit instead of SwiftUI, so it builds on Command Line Tools without full Xcode.
