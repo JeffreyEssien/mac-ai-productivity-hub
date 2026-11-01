@@ -53,6 +53,144 @@ private func reminderTitle(_ item: EKReminder) -> String {
     item.title ?? ""
 }
 
+// SF Symbol drawn in a fixed colour (hierarchical rendering, so layered symbols
+// keep their depth), which keeps its tint inside buttons and image views.
+private func symbolImage(_ name: String, size: CGFloat, color: NSColor, weight: NSFont.Weight = .regular) -> NSImage? {
+    let config = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
+        .applying(NSImage.SymbolConfiguration(hierarchicalColor: color))
+    return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
+}
+
+// A Reminders-style smart-list tile: coloured badge, live count and name.
+@MainActor
+final class SmartListTile: NSView {
+    var onClick: (() -> Void)?
+    var count = 0 { didSet { countLabel.stringValue = "\(count)" } }
+    var isSelected = false { didSet { applyStyle() } }
+    private let color: NSColor
+    private let symbol: String
+    private let badge = NSView()
+    private let icon = NSImageView()
+    private let countLabel = NSTextField(labelWithString: "0")
+    private let nameLabel: NSTextField
+
+    init(title: String, symbol: String, color: NSColor) {
+        self.color = color
+        self.symbol = symbol
+        nameLabel = NSTextField(labelWithString: title)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        badge.wantsLayer = true
+        badge.layer?.cornerRadius = 13
+        countLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        countLabel.alignment = .right
+        nameLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        for view in [badge, icon, countLabel, nameLabel] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            badge.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            badge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            badge.widthAnchor.constraint(equalToConstant: 26),
+            badge.heightAnchor.constraint(equalToConstant: 26),
+            icon.centerXAnchor.constraint(equalTo: badge.centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: badge.centerYAnchor),
+            countLabel.centerYAnchor.constraint(equalTo: badge.centerYAnchor),
+            countLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+            nameLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9)
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
+        applyStyle()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyStyle()
+    }
+
+    private func applyStyle() {
+        // Layer colours are CGColors, so resolve the dynamic NSColors for light/dark first.
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (isSelected ? color : NSColor.controlBackgroundColor).cgColor
+            badge.layer?.backgroundColor = (isSelected ? NSColor.white : color).cgColor
+        }
+        icon.image = symbolImage(symbol, size: 12, color: isSelected ? color : .white, weight: .bold)
+        countLabel.textColor = isSelected ? .white : .labelColor
+        nameLabel.textColor = isSelected ? .white : .secondaryLabelColor
+    }
+}
+
+// Rounded card filled with a fixed diagonal gradient (the same in light and dark mode).
+@MainActor
+final class GradientView: NSView {
+    private let colors: [CGColor]
+
+    init(colors: [NSColor]) {
+        self.colors = colors.map(\.cgColor)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 16
+        layer?.masksToBounds = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func makeBackingLayer() -> CALayer {
+        let gradient = CAGradientLayer()
+        gradient.colors = colors
+        gradient.startPoint = CGPoint(x: 0, y: 0)
+        gradient.endPoint = CGPoint(x: 1, y: 1)
+        return gradient
+    }
+}
+
+// One task row: a list-coloured completion circle, the title, and a due/list subtitle.
+@MainActor
+final class TaskCell: NSTableCellView {
+    let check = NSButton()
+    let titleField = NSTextField(labelWithString: "")
+    let subtitleField = NSTextField(labelWithString: "")
+
+    init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        self.identifier = identifier
+        check.isBordered = false
+        check.imagePosition = .imageOnly
+        check.setButtonType(.momentaryChange)
+        check.setAccessibilityLabel("Toggle complete")
+        titleField.lineBreakMode = .byTruncatingTail
+        subtitleField.lineBreakMode = .byTruncatingTail
+        for view in [check, titleField, subtitleField] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            check.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            check.centerYAnchor.constraint(equalTo: centerYAnchor),
+            check.widthAnchor.constraint(equalToConstant: 24),
+            titleField.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 10),
+            titleField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            titleField.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 1),
+            subtitleField.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
+            subtitleField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            subtitleField.topAnchor.constraint(equalTo: centerYAnchor, constant: 3)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+}
+
 @MainActor
 final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private let store = EKEventStore()
@@ -64,18 +202,32 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
     private var window: NSWindow!
     private var statusItem: NSStatusItem!
     private var table: NSTableView!
-    private var tabs: NSPopUpButton!
+    private var selectedTab = 0
+    private var tiles: [SmartListTile] = []
+    private var header: NSTextField!
     private var search: NSSearchField!
     private var stats: NSTextField!
     private var detail: NSTextField!
+    private var emptyState: NSTextField!
+    private var storageLabel: NSTextField?
     private var quickDatePicker: NSDatePicker?
-    private var overviewValues: [NSTextField] = []
     private var focusHeadline: NSTextField?
     private var focusDetail: NSTextField?
     private var compactStorage: NSTextField?
     private var compactPanel: NSPanel?
     private var compactSummary: NSTextField?
     private var compactNext: NSTextField?
+
+    // Smart lists, in the same order as tabHostIndex (macaihub:// links).
+    private struct TabStyle { let title: String; let symbol: String; let color: NSColor; let empty: String }
+    private static let tabStyles: [TabStyle] = [
+        TabStyle(title: "All Open", symbol: "tray.full.fill", color: .systemIndigo, empty: "No open tasks. Enjoy the free time."),
+        TabStyle(title: "Today", symbol: "sun.max.fill", color: .systemBlue, empty: "Nothing due today."),
+        TabStyle(title: "Overdue", symbol: "exclamationmark", color: .systemRed, empty: "You're all caught up."),
+        TabStyle(title: "Upcoming", symbol: "calendar", color: .systemOrange, empty: "Nothing scheduled ahead."),
+        TabStyle(title: "No Due Date", symbol: "infinity", color: .systemTeal, empty: "Every open task has a date."),
+        TabStyle(title: "Completed", symbol: "checkmark", color: .systemGreen, empty: "No completed tasks yet.")
+    ]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -101,192 +253,233 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
         return field
     }
 
+    private func sidebarButton(_ title: String, _ symbol: String, _ color: NSColor, _ action: Selector) -> NSButton {
+        let button = NSButton(title: "  " + title, image: symbolImage(symbol, size: 14, color: color, weight: .semibold) ?? NSImage(),
+            target: self, action: action)
+        button.isBordered = false
+        button.imagePosition = .imageLeading
+        button.alignment = .left
+        button.font = .systemFont(ofSize: 13, weight: .medium)
+        button.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        return button
+    }
+
+    private func actionButton(_ title: String, _ symbol: String, _ color: NSColor, _ action: Selector) -> NSButton {
+        let button = NSButton(title: title, image: symbolImage(symbol, size: 12, color: color, weight: .semibold) ?? NSImage(),
+            target: self, action: action)
+        button.bezelStyle = .rounded
+        button.imagePosition = .imageLeading
+        return button
+    }
+
     private func createWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 790),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 760),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Mac AI Productivity Hub"
-        window.minSize = NSSize(width: 850, height: 650)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.minSize = NSSize(width: 880, height: 640)
         window.center()
         let root = NSView()
-        root.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = root
 
-        let title = makeLabel("Your day, clearly organized", size: 26, bold: true)
-        title.translatesAutoresizingMaskIntoConstraints = false
+        // Sidebar: translucent like Apple's own apps, with colourful smart lists and tools.
+        let sidebar = NSVisualEffectView()
+        sidebar.material = .sidebar
+        sidebar.blendingMode = .behindWindow
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        let brand = makeLabel("PRODUCTIVITY HUB", size: 11, bold: true)
+        brand.textColor = .tertiaryLabelColor
+        tiles = Self.tabStyles.enumerated().map { index, style in
+            let tile = SmartListTile(title: style.title, symbol: style.symbol, color: style.color)
+            tile.onClick = { [weak self] in self?.selectTab(index) }
+            tile.widthAnchor.constraint(equalToConstant: 108).isActive = true
+            tile.heightAnchor.constraint(equalToConstant: 72).isActive = true
+            return tile
+        }
+        let grid = NSGridView(views: [[tiles[0], tiles[1]], [tiles[2], tiles[3]], [tiles[4], tiles[5]]])
+        grid.rowSpacing = 10
+        grid.columnSpacing = 10
+        let toolsHeading = makeLabel("TOOLS", size: 11, bold: true)
+        toolsHeading.textColor = .tertiaryLabelColor
+        let tools = NSStackView(views: [
+            sidebarButton("Today’s Plan", "sparkles", .systemPurple, #selector(showAIPlan)),
+            sidebarButton("Mac Health", "heart.text.square.fill", .systemPink, #selector(showDiagnostics)),
+            sidebarButton("Review Cleanup", "trash.fill", .systemOrange, #selector(showCleanup)),
+            sidebarButton("Desktop Companion", "macwindow.on.rectangle", .systemTeal, #selector(showCompactPanel)),
+            sidebarButton("AI Setup", "wand.and.stars", .systemIndigo, #selector(showAISetup)),
+            sidebarButton("Open Reminders", "list.bullet.rectangle.fill", .systemBlue, #selector(openReminders))
+        ])
+        tools.orientation = .vertical
+        tools.alignment = .leading
+        tools.spacing = 4
+        let storage = makeLabel("Checking storage…", size: 12)
+        storage.textColor = .secondaryLabelColor
+        storageLabel = storage
+        let storageIcon = NSImageView(image: symbolImage("internaldrive.fill", size: 12, color: .systemGray) ?? NSImage())
+        let storageRow = NSStackView(views: [storageIcon, storage])
+        storageRow.spacing = 6
+        for view in [brand, grid, toolsHeading, tools, storageRow] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            sidebar.addSubview(view)
+        }
+
+        header = makeLabel(Self.tabStyles[0].title, size: 28, bold: true)
+        header.textColor = Self.tabStyles[0].color
+        header.translatesAutoresizingMaskIntoConstraints = false
         stats = makeLabel("Connecting to Apple Reminders…", size: 13)
         stats.textColor = .secondaryLabelColor
         stats.translatesAutoresizingMaskIntoConstraints = false
 
-        let newButton = NSButton(title: "New Task", target: self, action: #selector(newTask))
-        newButton.bezelStyle = .rounded
-        newButton.keyEquivalent = "n"
-        newButton.keyEquivalentModifierMask = [.command]
-        let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refresh))
-        let compactButton = NSButton(title: "Desktop Companion", target: self, action: #selector(showCompactPanel))
-        let actions = NSStackView(views: [newButton, refreshButton, compactButton])
-        actions.orientation = .horizontal
-        actions.spacing = 8
-        actions.translatesAutoresizingMaskIntoConstraints = false
-
-        // Overview cards: readable facts before the detailed task table.
-        let overview = NSStackView()
-        overview.orientation = .horizontal
-        overview.distribution = .fillEqually
-        overview.spacing = 12
-        overview.translatesAutoresizingMaskIntoConstraints = false
-        for heading in ["Open tasks", "Overdue", "Due today", "Free storage"] {
-            let card = NSView()
-            card.wantsLayer = true
-            card.layer?.cornerRadius = 12
-            card.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-            card.translatesAutoresizingMaskIntoConstraints = false
-            let large = makeLabel("—", size: 21, bold: true)
-            let small = makeLabel(heading, size: 11)
-            small.textColor = .secondaryLabelColor
-            large.translatesAutoresizingMaskIntoConstraints = false
-            small.translatesAutoresizingMaskIntoConstraints = false
-            card.addSubview(large)
-            card.addSubview(small)
-            overviewValues.append(large)
-            NSLayoutConstraint.activate([
-                card.heightAnchor.constraint(equalToConstant: 70),
-                large.topAnchor.constraint(equalTo: card.topAnchor, constant: 9),
-                large.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 13),
-                small.topAnchor.constraint(equalTo: large.bottomAnchor, constant: 2),
-                small.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 13)
-            ])
-            overview.addArrangedSubview(card)
-        }
-
-        // A primary focus card gives the dashboard a useful purpose beyond
-        // duplicating the Apple Reminders list.
-        let focusCard = NSView()
-        focusCard.translatesAutoresizingMaskIntoConstraints = false
-        focusCard.wantsLayer = true
-        focusCard.layer?.cornerRadius = 14
-        focusCard.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        let focusKicker = makeLabel("YOUR NEXT STEP", size: 10, bold: true)
-        focusKicker.textColor = .secondaryLabelColor
-        focusKicker.translatesAutoresizingMaskIntoConstraints = false
-        let focusHeadline = makeLabel("Loading your priorities…", size: 17, bold: true)
-        focusHeadline.translatesAutoresizingMaskIntoConstraints = false
-        let focusDetail = makeLabel("Your reminders stay in iCloud. Suggestions never change them.", size: 12)
-        focusDetail.textColor = .secondaryLabelColor
-        focusDetail.translatesAutoresizingMaskIntoConstraints = false
-        let focusPlanButton = NSButton(title: "View Today’s Plan", target: self, action: #selector(showAIPlan))
-        focusPlanButton.translatesAutoresizingMaskIntoConstraints = false
-        for v in [focusKicker, focusHeadline, focusDetail, focusPlanButton] { focusCard.addSubview(v) }
-        self.focusHeadline = focusHeadline
-        self.focusDetail = focusDetail
-        NSLayoutConstraint.activate([
-            focusCard.heightAnchor.constraint(equalToConstant: 97),
-            focusKicker.leadingAnchor.constraint(equalTo: focusCard.leadingAnchor, constant: 18),
-            focusKicker.topAnchor.constraint(equalTo: focusCard.topAnchor, constant: 14),
-            focusHeadline.leadingAnchor.constraint(equalTo: focusKicker.leadingAnchor),
-            focusHeadline.topAnchor.constraint(equalTo: focusKicker.bottomAnchor, constant: 6),
-            focusHeadline.trailingAnchor.constraint(lessThanOrEqualTo: focusPlanButton.leadingAnchor, constant: -14),
-            focusDetail.leadingAnchor.constraint(equalTo: focusKicker.leadingAnchor),
-            focusDetail.topAnchor.constraint(equalTo: focusHeadline.bottomAnchor, constant: 5),
-            focusDetail.trailingAnchor.constraint(lessThanOrEqualTo: focusPlanButton.leadingAnchor, constant: -14),
-            focusPlanButton.trailingAnchor.constraint(equalTo: focusCard.trailingAnchor, constant: -18),
-            focusPlanButton.centerYAnchor.constraint(equalTo: focusCard.centerYAnchor)
-        ])
-
-        let healthButton = NSButton(title: "Mac Health", target: self, action: #selector(showDiagnostics))
-        let cleanupButton = NSButton(title: "Review Cleanup", target: self, action: #selector(showCleanup))
-        let aiButton = NSButton(title: "AI Setup", target: self, action: #selector(showAISetup))
-        let reminderButton = NSButton(title: "Open Reminders", target: self, action: #selector(openReminders))
-        let utilities = NSStackView(views: [healthButton, cleanupButton, aiButton, reminderButton])
-        utilities.orientation = .horizontal
-        utilities.spacing = 10
-        utilities.translatesAutoresizingMaskIntoConstraints = false
-
-        tabs = NSPopUpButton()
-        tabs.addItems(withTitles: ["All Open", "Today", "Overdue", "Upcoming", "No Due Date", "Completed"])
-        tabs.target = self
-        tabs.action = #selector(updateVisible)
-        tabs.translatesAutoresizingMaskIntoConstraints = false
         search = NSSearchField()
-        search.placeholderString = "Search existing reminders"
+        search.placeholderString = "Search reminders"
         search.target = self
         search.action = #selector(updateVisible)
         search.sendsSearchStringImmediately = true
-        search.translatesAutoresizingMaskIntoConstraints = false
-        let toolbar = NSStackView(views: [tabs, search])
-        toolbar.orientation = .horizontal
-        toolbar.spacing = 12
-        toolbar.distribution = .fill
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        tabs.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        search.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        let refreshButton = NSButton(image: symbolImage("arrow.clockwise", size: 12, color: .secondaryLabelColor, weight: .semibold) ?? NSImage(),
+            target: self, action: #selector(refresh))
+        refreshButton.bezelStyle = .rounded
+        refreshButton.toolTip = "Refresh reminders"
+        let newButton = NSButton(title: "New Task", image: NSImage(systemSymbolName: "plus", accessibilityDescription: nil) ?? NSImage(),
+            target: self, action: #selector(newTask))
+        newButton.bezelStyle = .rounded
+        newButton.bezelColor = .systemIndigo
+        newButton.imagePosition = .imageLeading
+        newButton.keyEquivalent = "n"
+        newButton.keyEquivalentModifierMask = [.command]
+        let topActions = NSStackView(views: [search, refreshButton, newButton])
+        topActions.spacing = 8
+        topActions.translatesAutoresizingMaskIntoConstraints = false
+
+        // A primary focus card gives the dashboard a useful purpose beyond
+        // duplicating the Apple Reminders list.
+        let focusCard = GradientView(colors: [
+            NSColor(srgbRed: 0.35, green: 0.34, blue: 0.84, alpha: 1),
+            NSColor(srgbRed: 0.69, green: 0.32, blue: 0.87, alpha: 1)
+        ])
+        focusCard.translatesAutoresizingMaskIntoConstraints = false
+        let focusKicker = makeLabel("YOUR NEXT STEP", size: 10, bold: true)
+        focusKicker.textColor = NSColor.white.withAlphaComponent(0.75)
+        let focusHeadline = makeLabel("Loading your priorities…", size: 19, bold: true)
+        focusHeadline.textColor = .white
+        let focusDetail = makeLabel("Your reminders stay in iCloud. Suggestions never change them.", size: 12)
+        focusDetail.textColor = NSColor.white.withAlphaComponent(0.85)
+        let focusPlanButton = NSButton(title: "", target: self, action: #selector(showAIPlan))
+        focusPlanButton.isBordered = false
+        focusPlanButton.attributedTitle = NSAttributedString(string: "View Today’s Plan  ", attributes: [
+            .foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 13, weight: .semibold)
+        ])
+        focusPlanButton.image = symbolImage("arrow.right.circle.fill", size: 15, color: .white)
+        focusPlanButton.imagePosition = .imageTrailing
+        focusPlanButton.wantsLayer = true
+        focusPlanButton.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.2).cgColor
+        focusPlanButton.layer?.cornerRadius = 16
+        for v in [focusKicker, focusHeadline, focusDetail, focusPlanButton] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            focusCard.addSubview(v)
+        }
+        self.focusHeadline = focusHeadline
+        self.focusDetail = focusDetail
 
         table = NSTableView()
-        table.headerView = NSTableHeaderView()
-        table.usesAlternatingRowBackgroundColors = false
-        table.rowHeight = 32
+        table.headerView = nil
+        table.style = .inset
+        table.rowHeight = 52
+        table.backgroundColor = .clear
         table.allowsMultipleSelection = false
         table.target = self
         table.doubleAction = #selector(editTask)
-        for (id, label, width) in [("title", "Task", 390.0), ("due", "Due", 190.0), ("list", "List", 160.0)] {
-            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-            column.title = label
-            column.width = width
-            column.minWidth = 110
-            table.addTableColumn(column)
-        }
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("task"))
+        column.resizingMask = .autoresizingMask
+        table.addTableColumn(column)
+        table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
         table.delegate = self
         table.dataSource = self
         let scroller = NSScrollView()
         scroller.documentView = table
         scroller.hasVerticalScroller = true
-        scroller.borderType = .bezelBorder
+        scroller.drawsBackground = false
+        scroller.borderType = .noBorder
         scroller.translatesAutoresizingMaskIntoConstraints = false
+        emptyState = makeLabel("", size: 15)
+        emptyState.font = .systemFont(ofSize: 15, weight: .medium)
+        emptyState.textColor = .tertiaryLabelColor
+        emptyState.isHidden = true
+        emptyState.translatesAutoresizingMaskIntoConstraints = false
 
-        let editButton = NSButton(title: "Edit Selected", target: self, action: #selector(editTask))
-        let completeButton = NSButton(title: "Toggle Complete", target: self, action: #selector(toggleComplete))
-        let snoozeDayButton = NSButton(title: "Snooze +1 day", target: self, action: #selector(snoozeOneDay))
-        let snoozeWeekButton = NSButton(title: "Snooze +1 week", target: self, action: #selector(snoozeOneWeek))
-        let bottomButtons = NSStackView(views: [editButton, completeButton, snoozeDayButton, snoozeWeekButton])
+        let bottomButtons = NSStackView(views: [
+            actionButton("Edit Selected", "pencil", .systemBlue, #selector(editTask)),
+            actionButton("Toggle Complete", "checkmark.circle.fill", .systemGreen, #selector(toggleComplete)),
+            actionButton("Snooze +1 day", "moon.zzz.fill", .systemOrange, #selector(snoozeOneDay)),
+            actionButton("Snooze +1 week", "calendar.badge.clock", .systemOrange, #selector(snoozeOneWeek))
+        ])
         bottomButtons.orientation = .horizontal
         bottomButtons.spacing = 8
         bottomButtons.translatesAutoresizingMaskIntoConstraints = false
-        detail = makeLabel("Select a task to edit or mark complete. Your iPhone syncs through iCloud.")
+        detail = makeLabel("Click a circle to complete a task, or double-click a row to edit. Your iPhone syncs through iCloud.", size: 12)
         detail.textColor = .secondaryLabelColor
         detail.translatesAutoresizingMaskIntoConstraints = false
 
-        // Both implicitly unwrapped outlets have been initialized above.
+        // All implicitly unwrapped outlets have been initialized above.
         // Explicitly use NSView so Swift does not infer an [NSView?] array.
-        let contentViews: [NSView] = [title, stats!, actions, overview, focusCard, utilities, toolbar, scroller, bottomButtons, detail!]
+        let contentViews: [NSView] = [sidebar, header!, stats!, topActions, focusCard, scroller, emptyState!, bottomButtons, detail!]
         for view in contentViews {
             root.addSubview(view)
         }
+        let content = sidebar.trailingAnchor
         NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
-            title.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            actions.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            actions.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -24),
-            actions.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 20),
-            stats.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
-            stats.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            stats.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            overview.topAnchor.constraint(equalTo: stats.bottomAnchor, constant: 12),
-            overview.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            overview.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            focusCard.topAnchor.constraint(equalTo: overview.bottomAnchor, constant: 12),
-            focusCard.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            focusCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            utilities.topAnchor.constraint(equalTo: focusCard.bottomAnchor, constant: 12),
-            utilities.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            toolbar.topAnchor.constraint(equalTo: utilities.bottomAnchor, constant: 14),
-            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            scroller.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 12),
-            scroller.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            scroller.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
+            sidebar.topAnchor.constraint(equalTo: root.topAnchor),
+            sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            sidebar.widthAnchor.constraint(equalToConstant: 254),
+            brand.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 52),
+            brand.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 18),
+            grid.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 10),
+            grid.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14),
+            toolsHeading.topAnchor.constraint(equalTo: grid.bottomAnchor, constant: 26),
+            toolsHeading.leadingAnchor.constraint(equalTo: brand.leadingAnchor),
+            tools.topAnchor.constraint(equalTo: toolsHeading.bottomAnchor, constant: 6),
+            tools.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14),
+            tools.trailingAnchor.constraint(lessThanOrEqualTo: sidebar.trailingAnchor, constant: -14),
+            storageRow.leadingAnchor.constraint(equalTo: brand.leadingAnchor),
+            storageRow.trailingAnchor.constraint(lessThanOrEqualTo: sidebar.trailingAnchor, constant: -14),
+            storageRow.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -18),
+
+            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 40),
+            header.leadingAnchor.constraint(equalTo: content, constant: 28),
+            topActions.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            topActions.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
+            topActions.leadingAnchor.constraint(greaterThanOrEqualTo: header.trailingAnchor, constant: 16),
+            stats.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 3),
+            stats.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            stats.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
+            focusCard.topAnchor.constraint(equalTo: stats.bottomAnchor, constant: 18),
+            focusCard.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            focusCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
+            focusCard.heightAnchor.constraint(equalToConstant: 104),
+            focusKicker.leadingAnchor.constraint(equalTo: focusCard.leadingAnchor, constant: 22),
+            focusKicker.topAnchor.constraint(equalTo: focusCard.topAnchor, constant: 18),
+            focusHeadline.leadingAnchor.constraint(equalTo: focusKicker.leadingAnchor),
+            focusHeadline.topAnchor.constraint(equalTo: focusKicker.bottomAnchor, constant: 6),
+            focusHeadline.trailingAnchor.constraint(lessThanOrEqualTo: focusPlanButton.leadingAnchor, constant: -16),
+            focusDetail.leadingAnchor.constraint(equalTo: focusKicker.leadingAnchor),
+            focusDetail.topAnchor.constraint(equalTo: focusHeadline.bottomAnchor, constant: 4),
+            focusDetail.trailingAnchor.constraint(lessThanOrEqualTo: focusPlanButton.leadingAnchor, constant: -16),
+            focusPlanButton.trailingAnchor.constraint(equalTo: focusCard.trailingAnchor, constant: -22),
+            focusPlanButton.centerYAnchor.constraint(equalTo: focusCard.centerYAnchor),
+            focusPlanButton.widthAnchor.constraint(equalToConstant: 180),
+            focusPlanButton.heightAnchor.constraint(equalToConstant: 32),
+            scroller.topAnchor.constraint(equalTo: focusCard.bottomAnchor, constant: 12),
+            scroller.leadingAnchor.constraint(equalTo: content, constant: 16),
+            scroller.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             scroller.bottomAnchor.constraint(equalTo: bottomButtons.topAnchor, constant: -12),
-            bottomButtons.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
+            emptyState.centerXAnchor.constraint(equalTo: scroller.centerXAnchor),
+            emptyState.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
+            bottomButtons.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             bottomButtons.bottomAnchor.constraint(equalTo: detail.topAnchor, constant: -10),
-            detail.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            detail.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
+            detail.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
             detail.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -18)
         ])
     }
@@ -335,9 +528,12 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
     }
 
     private func selectTab(host: String) {
-        let index = tabHostIndex[host.lowercased()] ?? 0
-        guard index < tabs.numberOfItems else { return }
-        tabs.selectItem(at: index)
+        selectTab(tabHostIndex[host.lowercased()] ?? 0)
+    }
+
+    private func selectTab(_ index: Int) {
+        guard index < Self.tabStyles.count else { return }
+        selectedTab = index
         updateVisible(nil)
     }
 
@@ -376,21 +572,24 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
         }
     }
 
+    private func matches(_ item: EKReminder, tab: Int, now: Date) -> Bool {
+        let due = reminderDate(item)
+        switch tab {
+        case 1: return !item.isCompleted && due.map { Calendar.current.isDateInToday($0) } == true
+        case 2: return reminderIsOverdue(item, now: now)
+        case 3: return !item.isCompleted && due.map { $0 > now && !Calendar.current.isDateInToday($0) } == true
+        case 4: return !item.isCompleted && due == nil
+        case 5: return item.isCompleted
+        default: return !item.isCompleted
+        }
+    }
+
     @objc private func updateVisible(_ sender: Any? = nil) {
         let now = Date()
-        let category = tabs.indexOfSelectedItem
         let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         visible = reminders.filter { item in
             if !query.isEmpty && !reminderTitle(item).localizedCaseInsensitiveContains(query) { return false }
-            let due = reminderDate(item)
-            switch category {
-            case 1: return !item.isCompleted && due.map { Calendar.current.isDateInToday($0) } == true
-            case 2: return reminderIsOverdue(item)
-            case 3: return !item.isCompleted && due.map { $0 > now && !Calendar.current.isDateInToday($0) } == true
-            case 4: return !item.isCompleted && due == nil
-            case 5: return item.isCompleted
-            default: return !item.isCompleted
-            }
+            return matches(item, tab: selectedTab, now: now)
         }.sorted { a, b in
             let da = reminderDate(a) ?? Date.distantFuture
             let db = reminderDate(b) ?? Date.distantFuture
@@ -398,22 +597,23 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
             return reminderTitle(a).localizedCaseInsensitiveCompare(reminderTitle(b)) == .orderedAscending
         }
         table.reloadData()
-        let openCount = reminders.filter { !$0.isCompleted }.count
-        let overdueCount = reminders.filter { reminderIsOverdue($0) }.count
-        let todayCount = reminders.filter { !$0.isCompleted && reminderDate($0).map { Calendar.current.isDateInToday($0) } == true }.count
-        stats.stringValue = "Changes synchronize through iCloud Reminders. Cleanup always asks for permission."
-        if overviewValues.count == 4 {
-            overviewValues[0].stringValue = String(openCount)
-            overviewValues[1].stringValue = String(overdueCount)
-            overviewValues[2].stringValue = String(todayCount)
-            if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()),
-               let free = attrs[.systemFreeSize] as? NSNumber {
-                overviewValues[3].stringValue = String(format: "%.1f GB", free.doubleValue / 1e9)
-            } else { overviewValues[3].stringValue = "—" }
+        for (index, tile) in tiles.enumerated() {
+            tile.count = reminders.filter { matches($0, tab: index, now: now) }.count
+            tile.isSelected = index == selectedTab
         }
+        let style = Self.tabStyles[selectedTab]
+        header.stringValue = style.title
+        header.textColor = style.color
+        stats.stringValue = "\(visible.count) \(visible.count == 1 ? "task" : "tasks")  ·  Changes sync through iCloud Reminders. Cleanup always asks first."
+        emptyState.stringValue = query.isEmpty ? style.empty : "No tasks match “\(query)”."
+        emptyState.isHidden = !visible.isEmpty || !granted
+        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()),
+           let free = attrs[.systemFreeSize] as? NSNumber {
+            storageLabel?.stringValue = String(format: "%.1f GB free on this Mac", free.doubleValue / 1e9)
+        } else { storageLabel?.stringValue = "Storage information unavailable" }
         updateFocusCard()
         updateCompactPanel()
-        updateStatusBarTitle(open: openCount, overdue: overdueCount)
+        updateStatusBarTitle(open: tiles[0].count, overdue: tiles[2].count)
     }
 
     private func updateStatusBarTitle(open: Int, overdue: Int) {
@@ -444,29 +644,41 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
     func numberOfRows(in tableView: NSTableView) -> Int { visible.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard row < visible.count, let tableColumn else { return nil }
+        guard row < visible.count else { return nil }
         let item = visible[row]
-        let text: String
-        switch tableColumn.identifier.rawValue {
-        case "due": text = reminderDueLabel(item)
-        case "list": text = item.calendar.title
-        default:
-            let raw = reminderTitle(item)
-            let taskTitle = raw.isEmpty ? "(Untitled reminder)" : raw
-            text = item.isCompleted ? "✓  \(taskTitle)" : taskTitle
-        }
-        let view = NSTableCellView()
-        let field = NSTextField(labelWithString: text)
-        field.lineBreakMode = .byTruncatingMiddle
-        field.translatesAutoresizingMaskIntoConstraints = false
-        if reminderIsOverdue(item) && tableColumn.identifier.rawValue == "due" { field.textColor = .systemRed }
-        view.addSubview(field)
-        NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-            field.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-            field.centerYAnchor.constraint(equalTo: view.centerYAnchor)
-        ])
-        return view
+        let id = NSUserInterfaceItemIdentifier("taskCell")
+        let cell = (tableView.makeView(withIdentifier: id, owner: nil) as? TaskCell) ?? TaskCell(identifier: id)
+        let listColor = NSColor(cgColor: item.calendar.cgColor) ?? .systemBlue
+        cell.check.image = symbolImage(item.isCompleted ? "checkmark.circle.fill" : "circle", size: 19, color: listColor)
+        cell.check.target = self
+        cell.check.action = #selector(toggleRow(_:))
+
+        let raw = reminderTitle(item)
+        var titleAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 14, weight: .medium),
+            .foregroundColor: item.isCompleted ? NSColor.secondaryLabelColor : NSColor.labelColor
+        ]
+        if item.isCompleted { titleAttrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+        let taskTitle = raw.isEmpty ? "(Untitled reminder)" : raw
+        cell.titleField.attributedStringValue = NSAttributedString(string: taskTitle, attributes: titleAttrs)
+
+        // Due date coloured by urgency, then a dot and the list name in the list's own colour.
+        let small = NSFont.systemFont(ofSize: 12)
+        let due = reminderDate(item)
+        let overdue = reminderIsOverdue(item)
+        let dueColor: NSColor
+        if item.isCompleted || due == nil { dueColor = .tertiaryLabelColor }
+        else if overdue { dueColor = .systemRed }
+        else if due.map({ Calendar.current.isDateInToday($0) }) == true { dueColor = .systemBlue }
+        else { dueColor = .secondaryLabelColor }
+        let subtitle = NSMutableAttributedString(string: overdue ? "Overdue · \(reminderDueLabel(item))" : reminderDueLabel(item),
+            attributes: [.font: small, .foregroundColor: dueColor])
+        subtitle.append(NSAttributedString(string: "   ●  ", attributes: [
+            .font: NSFont.systemFont(ofSize: 8), .foregroundColor: listColor, .baselineOffset: 1.5
+        ]))
+        subtitle.append(NSAttributedString(string: item.calendar.title, attributes: [.font: small, .foregroundColor: NSColor.secondaryLabelColor]))
+        cell.subtitleField.attributedStringValue = subtitle
+        return cell
     }
 
     private func selectedReminder() -> EKReminder? {
@@ -491,6 +703,16 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
 
     @objc private func toggleComplete(_ sender: Any?) {
         guard let item = selectedReminder() else { alert("Select a reminder", "Choose a row to mark complete."); return }
+        toggle(item)
+    }
+
+    @objc private func toggleRow(_ sender: NSButton) {
+        let row = table.row(for: sender)
+        guard row >= 0, row < visible.count else { return }
+        toggle(visible[row])
+    }
+
+    private func toggle(_ item: EKReminder) {
         let current = (store.calendarItem(withIdentifier: item.calendarItemIdentifier) as? EKReminder) ?? item
         current.isCompleted = !current.isCompleted
         do { try store.save(current, commit: true); refresh(nil) }
@@ -574,6 +796,7 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
         }
         for view in [name, listMenu, hasDue, hasTime, quick, picker] { box.addSubview(view) }
         let dialog = NSAlert()
+        dialog.icon = symbolImage(original == nil ? "plus.circle.fill" : "pencil.circle.fill", size: 44, color: .systemIndigo)
         dialog.messageText = original == nil ? "Add Reminder" : "Edit Reminder"
         dialog.informativeText = "Tasks use your existing Apple Reminders lists and synchronize through iCloud."
         dialog.accessoryView = box
