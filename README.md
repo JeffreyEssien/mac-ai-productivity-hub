@@ -6,6 +6,8 @@ Everything runs on your Mac. Tasks live in your existing iCloud Reminders, so ch
 
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey) ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-blue) ![Swift](https://img.shields.io/badge/Swift-AppKit-orange) ![Python](https://img.shields.io/badge/Python-3%20stdlib-yellow) ![Version](https://img.shields.io/badge/version-0.5.0-green)
 
+![Mac AI Productivity Hub dashboard](docs/dashboard.jpg)
+
 ## Features
 
 **Native app (Swift + AppKit + EventKit)**
