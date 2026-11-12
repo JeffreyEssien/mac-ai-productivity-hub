@@ -22,6 +22,9 @@ class HubServiceTests(unittest.TestCase):
         self.home_patcher = patch.object(storage_manager, 'HOME', self.home)
         self.home_patcher.start()
         self.addCleanup(self.home_patcher.stop)
+        apps = patch.object(storage_manager, 'APPLICATIONS', self.home / 'NoApps')
+        apps.start()
+        self.addCleanup(apps.stop)
 
     def make_old(self, path):
         path.write_text('example')

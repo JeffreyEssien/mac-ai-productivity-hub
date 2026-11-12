@@ -26,9 +26,40 @@ LABELS = {
     'installers': 'Old installer',
     'vscode_updater': 'VS Code update files',
     'vscode_vsix': 'VS Code extension installer',
+    'partial_download': 'Unfinished download',
+    'unpacked_zip': 'Zip already unpacked',
+    'app_cache': 'App cache (quit the app first)',
+    'npm_cache': 'npm download cache',
+    'vscode_old_extension': 'Unused VS Code extension version',
+    'node_modules': 'Project packages (npm install restores)',
     'application_support': 'Application data — review only',
     'browser_or_app_cache': 'Application cache — review only',
+    'large_app': 'Large app',
+    'app_data': 'App data',
+    'icloud_archive': 'iCloud Drive (Archive) copy',
+    'icloud_leftover': 'Old iCloud sync folder',
+    'ios_backups': 'iPhone/iPad backups',
+    'duplicate_project': 'Project copy',
 }
+
+
+def _display_name(category: str, path: Path) -> str:
+    if category == 'node_modules':
+        return f'{path.parent.name}/node_modules'
+    if category == 'npm_cache':
+        return '~/.npm cache'
+    return path.name
+
+
+def _report_name(record) -> str:
+    """Duplicate projects often share a folder name, so show where each copy lives."""
+    path = Path(record['path'])
+    if record['category'] == 'duplicate_project':
+        try:
+            return str(path.relative_to(storage.HOME))
+        except ValueError:
+            return str(path)
+    return path.name
 
 
 def _size_label(size: int) -> str:
@@ -45,10 +76,10 @@ def _fingerprint(path: Path, category: str) -> str:
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
 
-def scanned_candidates(config_path: Path):
+def scanned_candidates(config_path: Path, with_sizes: bool = True):
     cfg = storage.config_load(config_path)
     items = []
-    for obj in storage.candidates(cfg, time.time()):
+    for obj in storage.candidates(cfg, time.time(), with_sizes=with_sizes):
         p = Path(obj['path'])
         try:
             stamp = _fingerprint(p, obj['category'])
@@ -56,8 +87,9 @@ def scanned_candidates(config_path: Path):
             continue
         items.append({
             'category': obj['category'], 'label': LABELS.get(obj['category'], 'File'),
-            'path': obj['path'], 'name': p.name, 'bytes': obj['bytes'],
+            'path': obj['path'], 'name': _display_name(obj['category'], p), 'bytes': obj['bytes'],
             'size': _size_label(obj['bytes']), 'fingerprint': stamp,
+            'requires_quit': obj.get('requires_quit'),
         })
     return items
 
@@ -67,9 +99,12 @@ def scan(config_path: Path):
     cfg = storage.config_load(config_path)
     report_only = [
         {
-            'label': LABELS.get(x['category'], 'Data to review'),
-            'name': Path(x['path']).name, 'path': x['path'],
-            'size': _size_label(x['bytes']), 'bytes': x['bytes'],
+            'category': x['category'],
+            'label': x.get('label') or LABELS.get(x['category'], 'Data to review'),
+            'name': _report_name(x), 'path': x['path'],
+            'size': _size_label(x['bytes']) if x.get('size_known', True) else 'size unknown',
+            'bytes': x['bytes'], 'advice': x.get('advice', ''),
+            'has_env': x.get('has_env'), 'last_touched': x.get('last_touched'),
         }
         for x in storage.reports(cfg)
     ]
@@ -92,18 +127,19 @@ def trash_one(config_path: Path, fingerprint: str):
     """
     if not re.fullmatch(r'[0-9a-f]{64}', fingerprint):
         raise ValueError('Invalid candidate token')
-    items = scanned_candidates(config_path)
+    # Sizes aren't needed to match the token, and measuring big folders again is slow.
+    items = scanned_candidates(config_path, with_sizes=False)
     item = next((x for x in items if x['fingerprint'] == fingerprint), None)
     if item is None:
         raise ValueError('File changed or no longer qualifies. Scan again; nothing moved.')
     path = Path(item['path'])
     if item['category'].startswith('vscode') and storage.app_running('Visual Studio Code|Code Helper'):
-        raise ValueError('Quit VS Code before removing its old installers.')
+        raise ValueError('Quit VS Code before removing its old installers or extensions.')
     # Revalidation and Finder Trash live in storage_manager. This does NOT call
     # rm, empty Trash, or permanently remove a file.
     storage.trash_with_finder(path)
     storage.setup_log().info('GUI_APPROVED_TRASH %s', path)
-    return {'status': 'moved_to_trash', 'name': path.name, 'size': item['size']}
+    return {'status': 'moved_to_trash', 'name': item['name']}
 
 
 def command_output(args, timeout=8):

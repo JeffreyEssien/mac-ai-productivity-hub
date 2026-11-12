@@ -861,7 +861,8 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
 
     // MARK: - JSON-backed, read-only system diagnostics and safe cleanup
 
-    private func service(_ parameters: [String]) -> [String: Any]? {
+    // nonisolated: Review Cleanup runs slow scans on a background queue.
+    nonisolated private func service(_ parameters: [String]) -> [String: Any]? {
         guard let backend = Bundle.main.resourceURL?.appendingPathComponent("Backend") else { return nil }
         let source = backend.appendingPathComponent("hub_services.py")
         guard FileManager.default.fileExists(atPath: source.path) else { return nil }
@@ -939,7 +940,7 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
 
         WHAT TO DO
         • Quit apps you aren't using if your Mac feels sluggish.
-        • Open Review Cleanup to inspect old screenshots and installers.
+        • Open Review Cleanup to inspect app caches, old downloads and unused project packages.
         • Use Activity Monitor’s Memory Pressure graph to confirm RAM pressure.
         • Do not delete system data, application databases, or swap files.
 
@@ -948,13 +949,52 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
         presentReadableReport("Mac Health, explained", report)
     }
 
+    private var cleanupScanRunning = false
+
+    /// One line per report-only item: what it is, how big, and what to do about it.
+    private func reportLine(_ item: [String: Any]) -> String {
+        let label = item["label"] as? String ?? "Data"
+        let name = item["name"] as? String ?? ""
+        let size = item["size"] as? String ?? ""
+        var line = "• \(label) · \(name) (\(size))"
+        if item["category"] as? String == "duplicate_project" {
+            let env = (item["has_env"] as? Bool ?? false) ? "has .env" : "no .env"
+            line += " — \(env), last changed \(item["last_touched"] as? String ?? "?")"
+        }
+        if let advice = item["advice"] as? String, !advice.isEmpty { line += "\n   \(advice)" }
+        return line
+    }
+
     @objc private func showCleanup(_ sender: Any?) {
-        guard let scan = serviceData(["scan"]) else { return }
+        // Measuring project folders and apps can take a while, so scan off the main thread.
+        guard !cleanupScanRunning else { return }
+        cleanupScanRunning = true
+        stats?.stringValue = "Scanning storage… this can take up to a minute."
+        DispatchQueue.global(qos: .userInitiated).async {
+            let response = self.service(["scan"])
+            DispatchQueue.main.async {
+                self.cleanupScanRunning = false
+                self.refresh(nil)
+                self.presentCleanup(response)
+            }
+        }
+    }
+
+    private func presentCleanup(_ response: [String: Any]?) {
+        guard let response = response else {
+            alert("Feature unavailable", "The Python helper couldn't run. Confirm Python 3 is installed and reinstall the latest Hub version.")
+            return
+        }
+        guard response["ok"] as? Bool == true, let scan = response["data"] as? [String: Any] else {
+            alert("Couldn't finish", response["error"] as? String ?? "Please try again.")
+            return
+        }
         let candidates = scan["candidates"] as? [[String: Any]] ?? []
         let reports = scan["report_only"] as? [[String: Any]] ?? []
         guard !candidates.isEmpty else {
-            let biggest = reports.prefix(4).map { "• \($0["name"] as? String ?? "App"): \($0["size"] as? String ?? "")" }.joined(separator: "\n")
-            alert("Nothing safe to remove right now", "No screenshots or installer files meet the configured age limits.\n\nOther large folders are report-only:\n" + biggest)
+            let biggest = reports.prefix(8).map { reportLine($0) }.joined(separator: "\n")
+            presentReadableReport("Nothing safe to remove right now",
+                                  "No caches, old downloads or unused project packages meet the configured limits.\n\nCHECK THESE YOURSELF (the Hub never removes them)\n" + biggest)
             return
         }
         // All checkboxes start unchecked. Nothing moves until the user selects
@@ -970,7 +1010,8 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
             let label = candidate["label"] as? String ?? "File"
             let name = candidate["name"] as? String ?? "Unknown file"
             let size = candidate["size"] as? String ?? ""
-            let check = NSButton(checkboxWithTitle: "\(label) · \(name) (\(size))", target: nil, action: nil)
+            let quit = (candidate["requires_quit"] as? String).map { " — quit \($0) first" } ?? ""
+            let check = NSButton(checkboxWithTitle: "\(label) · \(name) (\(size))\(quit)", target: nil, action: nil)
             check.state = .off
             check.toolTip = candidate["path"] as? String
             check.font = NSFont.systemFont(ofSize: 12)
@@ -979,9 +1020,26 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
             stack.addArrangedSubview(check)
             selections.append((check, candidate))
         }
+        // Report-only items: shown with advice, never given a checkbox.
+        if !reports.isEmpty {
+            let heading = NSTextField(labelWithString: "CHECK THESE YOURSELF — the Hub never removes them")
+            heading.font = NSFont.boldSystemFont(ofSize: 12)
+            stack.setCustomSpacing(16, after: stack.arrangedSubviews.last ?? heading)
+            stack.addArrangedSubview(heading)
+            for item in reports.prefix(40) {
+                let line = NSTextField(wrappingLabelWithString: reportLine(item))
+                line.font = NSFont.systemFont(ofSize: 11)
+                line.textColor = .secondaryLabelColor
+                line.toolTip = item["path"] as? String
+                line.preferredMaxLayoutWidth = 550
+                line.widthAnchor.constraint(equalToConstant: 550).isActive = true
+                stack.addArrangedSubview(line)
+            }
+        }
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 575, height: 330))
         scroll.hasVerticalScroller = true
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 570, height: CGFloat(max(330, 34 * shown.count))))
+        let contentHeight = stack.fittingSize.height + 16
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 570, height: max(330, contentHeight)))
         box.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: box.topAnchor, constant: 8),
@@ -991,7 +1049,7 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
         scroll.documentView = box
         let review = NSAlert()
         review.messageText = "Review old files — nothing selected"
-        review.informativeText = "Select only files you want to move to Trash. Browser profiles, projects, Application Support and Docker volumes are excluded."
+        review.informativeText = "Select only items you want to move to Trash. Project source code, .env files, browser profiles, Application Support and Docker volumes are never listed."
         review.accessoryView = scroll
         review.addButton(withTitle: "Review Selected")
         review.addButton(withTitle: "Cancel")
@@ -1006,15 +1064,24 @@ final class MacHub: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTa
         confirm.addButton(withTitle: "Move to Trash")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
-        var moved = 0
-        var failed = 0
-        for item in selected {
-            guard let token = item["fingerprint"] as? String else { failed += 1; continue }
-            let result = service(["trash", token])
-            if result?["ok"] as? Bool == true { moved += 1 } else { failed += 1 }
+        // Each item is re-checked before it moves, which can be slow for big folders.
+        let tokens = selected.map { $0["fingerprint"] as? String }
+        stats?.stringValue = "Moving \(selected.count) items to Trash…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var moved = 0
+            var errors: [String] = []
+            for token in tokens {
+                guard let token = token else { errors.append("Missing item token"); continue }
+                let result = self.service(["trash", token])
+                if result?["ok"] as? Bool == true { moved += 1 }
+                else { errors.append(result?["error"] as? String ?? "Could not move an item") }
+            }
+            DispatchQueue.main.async {
+                let reasons = Set(errors).prefix(3).map { "• \($0)" }.joined(separator: "\n")
+                self.alert("Cleanup complete", "\(moved) items moved to Trash. \(errors.count) could not be moved or changed before cleanup.\(reasons.isEmpty ? "" : "\n" + reasons)\n\nNothing was permanently deleted. Empty the Trash to get the space back. Run npm install in a project to restore its packages.")
+                self.refresh(nil)
+            }
         }
-        alert("Cleanup complete", "\(moved) items moved to Trash. \(failed) could not be moved or changed before cleanup. Nothing was permanently deleted.\n\nBrowser and Spotify caches remain review-only. pip and Homebrew require their own separate native cleanup commands.")
-        refresh(nil)
     }
 
     // MARK: - Typed Apple Intelligence handoff (plus reliable offline fallback)

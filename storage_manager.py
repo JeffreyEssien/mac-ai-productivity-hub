@@ -3,6 +3,14 @@
 
 Scheduled runs ALWAYS report only. Interactive --execute allows allowlisted cleanup.
 Application Support and browser/Spotify caches are intentionally report-only.
+
+Trash candidates (rebuildable or leftover data only):
+  screenshots, installers, VS Code updater/VSIX caches, app caches in
+  ~/Library/Caches, the npm download cache, unfinished downloads, zips that are
+  already unpacked, VS Code extension versions VS Code no longer uses, and
+  node_modules in projects that haven't been touched for a while.
+Report-only (with advice, never removed): large apps, chat/Docker app data,
+  iCloud leftovers, iPhone backups and the same project copied to several places.
 """
 import argparse
 import datetime as dt
@@ -29,6 +37,38 @@ APP_SUPPORT_NAMES = ('Claude', 'Code', 'Google', 'Arc', 'Spotify', 'Antigravity'
 REPORT_CACHE_NAMES = ('com.spotify.client', 'Arc', 'Google', 'Cypress', 'ms-playwright', 'ms-playwright-go')
 VS_CODE = 'Visual Studio Code'
 LABEL = 'com.local.mac-storage-manager'
+PARTIAL_SUFFIXES = {'.part', '.crdownload', '.download', '.partial'}
+# Caches that belong to the system, are already handled elsewhere, or stay report-only.
+CACHE_SKIP = set(REPORT_CACHE_NAMES) | {'com.microsoft.VSCode.ShipIt', 'Homebrew', 'pip', 'CloudKit'}
+EXTENSION_DIR = re.compile(r'^[\w-]+\.[\w.-]+-\d+\.\d+\.\d+[\w.-]*$')
+ENV_TEMPLATES = {'.env.example', '.env.sample', '.env.template', '.env.dist'}
+DEFAULT_PROJECT_ROOTS = ('Documents', 'Developer', 'Desktop', 'Projects', 'code', 'iCloud Drive (Archive)')
+PROJECT_SKIP_DIRS = {'node_modules', 'Library', 'Applications', '__pycache__', 'venv', '.venv', 'dist', 'build'}
+PROJECT_MAX_DEPTH = 5
+# App data that only the app itself can clean safely. (path under ~/Library, label, advice)
+APP_DATA_REPORTS = (
+    ('Group Containers/group.net.whatsapp.WhatsApp.shared', 'WhatsApp media',
+     'In WhatsApp: Settings → Storage and Data → Manage Storage, then delete large videos.'),
+    ('Group Containers/*.ru.keepcoder.Telegram', 'Telegram cache',
+     'In Telegram: Settings → Data and Storage → Storage Usage → Clear Cache.'),
+    ('Containers/com.docker.docker', 'Docker disk image',
+     'If you are not using containers now, run: docker system prune -a'),
+    ('Containers/com.microsoft.teams2', 'Microsoft Teams data',
+     'Sign out of Teams and clear its cache from Teams settings.'),
+)
+# Optional settings, so older config.json files keep working.
+OPTIONAL_DEFAULTS = {
+    'cache_min_mb': 100,           # app caches smaller than this aren't listed
+    'partial_download_days': 2,    # unfinished downloads untouched for this long
+    'unpacked_zip_days': 7,        # zips whose folder is already unpacked next to them
+    'node_modules_days': 30,       # project untouched for this long
+    'large_app_gb': 2,             # report apps at least this big
+    'app_data_report_gb': 1,       # report chat/Docker data at least this big
+}
+
+
+def opt(cfg, key):
+    return cfg.get(key, OPTIONAL_DEFAULTS[key])
 
 
 def config_load(path):
@@ -39,6 +79,12 @@ def config_load(path):
     for key in ('screenshot_days', 'installer_days', 'vscode_cache_days', 'large_support_gb', 'homebrew_prune_days'):
         if not isinstance(cfg.get(key), int) or isinstance(cfg[key], bool) or cfg[key] < 1:
             raise ValueError(f'Config {key} must be a positive integer')
+    for key in OPTIONAL_DEFAULTS:
+        if key in cfg and (not isinstance(cfg[key], int) or isinstance(cfg[key], bool) or cfg[key] < 1):
+            raise ValueError(f'Config {key} must be a positive integer')
+    roots = cfg.get('project_roots')
+    if roots is not None and (not isinstance(roots, list) or not all(isinstance(r, str) and r for r in roots)):
+        raise ValueError('Config project_roots must be a list of folder names')
     return cfg
 
 
@@ -86,6 +132,22 @@ def size_bytes(path):
     return total
 
 
+def du_bytes(path):
+    """Disk space a folder really uses, via du (fast for big trees, never follows symlinks).
+
+    du still prints a total when some files are unreadable; 0 means unknown.
+    """
+    if path.is_symlink():
+        return 0
+    try:
+        res = run_cmd(['du', '-sk', str(path)], timeout=180)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    lines = res.stdout.strip().splitlines()
+    first = lines[-1].split('\t', 1)[0].strip() if lines else ''
+    return int(first) * 1024 if first.isdigit() else 0
+
+
 def mib(b):
     return f'{b / 1024**2:.1f} MiB'
 
@@ -111,8 +173,122 @@ def app_running(pattern):
         return True  # fail closed
 
 
-def candidates(cfg, now):
+APPLICATIONS = Path('/Applications')
+GENERIC_PROJECT_NAMES = {'app', 'my-app', 'web', 'frontend', 'backend', 'client', 'server', 'api',
+                         'vite-project', 'next-app', 'my-next-app', 'nextjs', 'react-app', 'test', 'demo'}
+
+
+def project_roots(cfg):
+    """Folders to look for projects in. Always inside HOME and never ~/Library (iCloud sync, app data)."""
+    roots = []
+    library = HOME / 'Library'
+    for name in cfg.get('project_roots') or DEFAULT_PROJECT_ROOTS:
+        p = Path(name).expanduser()
+        p = p if p.is_absolute() else HOME / p
+        if p == HOME or HOME not in p.parents or p == library or library in p.parents:
+            continue
+        if p.is_dir() and not p.is_symlink() and p not in roots:
+            roots.append(p)
+    return roots
+
+
+def find_projects(cfg):
+    """Map each top-level JavaScript project (has package.json) to the node_modules folders inside it."""
+    projects = {}
+    for root in project_roots(cfg):
+        for dirpath, dirs, files in os.walk(root, followlinks=False, onerror=lambda e: None):
+            d = Path(dirpath)
+            depth = len(d.relative_to(root).parts)
+            if 'package.json' in files:
+                owner = next((a for a in (d, *d.parents) if a in projects), None)
+                if owner is None:
+                    owner = d
+                    projects[d] = []
+                nm = d / 'node_modules'
+                if 'node_modules' in dirs and nm.is_dir() and not nm.is_symlink():
+                    projects[owner].append(nm)
+            if depth >= PROJECT_MAX_DEPTH:
+                dirs[:] = []
+            else:
+                dirs[:] = [x for x in dirs if not x.startswith('.') and x not in PROJECT_SKIP_DIRS
+                           and not (d / x).is_symlink()]
+    return projects
+
+
+def project_last_touched(project):
+    """Newest change time in a project's own files (ignores node_modules and .git contents)."""
+    newest = 0.0
+    seen = 0
+    for extra in (project / '.git' / 'index', project / '.git' / 'HEAD'):
+        try:
+            newest = max(newest, extra.stat(follow_symlinks=False).st_mtime)
+        except OSError:
+            pass
+    for dirpath, dirs, files in os.walk(project, followlinks=False, onerror=lambda e: None):
+        d = Path(dirpath)
+        try:
+            newest = max(newest, d.stat(follow_symlinks=False).st_mtime)
+        except OSError:
+            pass
+        depth = len(d.relative_to(project).parts)
+        dirs[:] = [] if depth >= 3 else [x for x in dirs if x not in ('node_modules', '.git')
+                                         and not (d / x).is_symlink()]
+        for name in files:
+            try:
+                newest = max(newest, (d / name).stat(follow_symlinks=False).st_mtime)
+            except OSError:
+                continue
+            seen += 1
+            if seen >= 5000:
+                return newest
+    return newest
+
+
+def has_real_env(project):
+    try:
+        return any(p.name.startswith('.env') and p.name not in ENV_TEMPLATES and p.is_file()
+                   for p in project.iterdir())
+    except OSError:
+        return False
+
+
+def vscode_extensions_in_use(ext_dir):
+    """Folder names VS Code lists in extensions.json, or None when it can't be read (fail closed)."""
+    try:
+        data = json.loads((ext_dir / 'extensions.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, list):
+        return None
+    used = set()
+    for entry in data:
+        if not isinstance(entry, dict):
+            return None
+        rel = entry.get('relativeLocation')
+        loc = entry.get('location')
+        if isinstance(rel, str):
+            used.add(rel)
+        elif isinstance(loc, dict) and isinstance(loc.get('path'), str):
+            used.add(Path(loc['path']).name)
+        elif isinstance(loc, str):
+            used.add(Path(loc).name)
+    return used or None
+
+
+def candidates(cfg, now, with_sizes=True):
+    """Everything the tool may move to Trash after approval.
+
+    with_sizes=False skips measuring (used to re-check a single item quickly). It can
+    only add items that are under a size threshold; every path rule still applies.
+    """
+    sz = size_bytes if with_sizes else (lambda p: 0)
+    dsz = du_bytes if with_sizes else (lambda p: 0)
     result = []
+
+    def add(category, p, size, age_days=0, requires_quit=None, **extra):
+        result.append({'category': category, 'path': str(p), 'bytes': size, 'age_days': age_days,
+                       'requires_quit': requires_quit, **extra})
+
     desktop = HOME / 'Desktop'
     downloads = HOME / 'Downloads'
     caches = HOME / 'Library' / 'Caches'
@@ -121,22 +297,31 @@ def candidates(cfg, now):
         for p in desktop.iterdir():
             try:
                 if safe_child(p, desktop) and p.is_file() and SCREENSHOT.fullmatch(p.name) and older(p, cfg['screenshot_days'], now):
-                    result.append({'category': 'screenshots', 'path': str(p), 'bytes': size_bytes(p), 'age_days': cfg['screenshot_days'], 'requires_quit': None})
+                    add('screenshots', p, sz(p), cfg['screenshot_days'])
             except OSError:
                 continue
     if downloads.is_dir() and not downloads.is_symlink():
         for p in downloads.iterdir():
             try:
-                if (safe_child(p, downloads) and p.is_file() and p.suffix.lower() in INSTALLERS
-                        and older(p, cfg['installer_days'], now)):
-                    result.append({'category': 'installers', 'path': str(p), 'bytes': size_bytes(p), 'age_days': cfg['installer_days'], 'requires_quit': None})
+                if not safe_child(p, downloads):
+                    continue
+                suffix = p.suffix.lower()
+                if p.is_file() and suffix in INSTALLERS and older(p, cfg['installer_days'], now):
+                    add('installers', p, sz(p), cfg['installer_days'])
+                elif (suffix in PARTIAL_SUFFIXES and (p.is_file() or (p.is_dir() and suffix == '.download'))
+                        and older(p, opt(cfg, 'partial_download_days'), now)):
+                    add('partial_download', p, dsz(p) if p.is_dir() else sz(p), opt(cfg, 'partial_download_days'))
+                elif suffix == '.zip' and p.is_file() and older(p, opt(cfg, 'unpacked_zip_days'), now):
+                    unpacked = downloads / p.stem
+                    if unpacked.is_dir() and not unpacked.is_symlink():
+                        add('unpacked_zip', p, sz(p), opt(cfg, 'unpacked_zip_days'))
             except OSError:
                 continue
     # VSCode updater cache, or aged top-level VSIX installer archives. Avoid clearing extension settings.
     shipit = caches / 'com.microsoft.VSCode.ShipIt'
     try:
         if safe_child(shipit, caches) and older(shipit, cfg['vscode_cache_days'], now):
-            result.append({'category': 'vscode_updater', 'path': str(shipit), 'bytes': size_bytes(shipit), 'age_days': cfg['vscode_cache_days'], 'requires_quit': VS_CODE})
+            add('vscode_updater', shipit, sz(shipit), cfg['vscode_cache_days'], VS_CODE)
     except OSError:
         pass
     vsix = code / 'CachedExtensionVSIXs'
@@ -145,10 +330,70 @@ def candidates(cfg, now):
             try:
                 if (safe_child(p, vsix) and p.is_file() and p.suffix.lower() == '.vsix'
                         and older(p, cfg['vscode_cache_days'], now)):
-                    result.append({'category': 'vscode_vsix', 'path': str(p), 'bytes': size_bytes(p), 'age_days': cfg['vscode_cache_days'], 'requires_quit': VS_CODE})
+                    add('vscode_vsix', p, sz(p), cfg['vscode_cache_days'], VS_CODE)
             except OSError:
                 continue
+    # Per-app caches. Apps rebuild these; the app itself should be closed first.
+    min_cache = opt(cfg, 'cache_min_mb') * 1024 ** 2
+    if caches.is_dir() and not caches.is_symlink():
+        for p in caches.iterdir():
+            try:
+                if (safe_child(p, caches) and p.is_dir() and not p.name.startswith(('com.apple.', '.'))
+                        and p.name not in CACHE_SKIP):
+                    size = dsz(p)
+                    if not with_sizes or size >= min_cache:
+                        add('app_cache', p, size)
+            except OSError:
+                continue
+    npm_root = HOME / '.npm'
+    npm_cache = npm_root / '_cacache'
+    try:
+        if safe_child(npm_cache, npm_root) and npm_cache.is_dir() and not npm_root.is_symlink():
+            size = dsz(npm_cache)
+            if not with_sizes or size >= min_cache:
+                add('npm_cache', npm_cache, size)
+    except OSError:
+        pass
+    # Extension versions VS Code itself no longer lists (left behind after updates).
+    ext = HOME / '.vscode' / 'extensions'
+    if ext.is_dir() and not ext.is_symlink():
+        used = vscode_extensions_in_use(ext)
+        if used:
+            for p in ext.iterdir():
+                try:
+                    if (safe_child(p, ext) and p.is_dir() and EXTENSION_DIR.fullmatch(p.name)
+                            and p.name not in used):
+                        add('vscode_old_extension', p, dsz(p), 0, VS_CODE)
+                except OSError:
+                    continue
+    # node_modules in projects nobody has touched for a while. Source code and .env stay.
+    days = opt(cfg, 'node_modules_days')
+    for project, folders in find_projects(cfg).items():
+        if not folders:
+            continue
+        try:
+            if project_last_touched(project) >= now - days * 86400:
+                continue
+        except OSError:
+            continue
+        for nm in folders:
+            if nm.name == 'node_modules' and nm.is_dir() and not nm.is_symlink() and (nm.parent / 'package.json').is_file():
+                add('node_modules', nm, dsz(nm), days, project=str(project))
     return sorted(result, key=lambda x: x['bytes'], reverse=True)
+
+
+def still_eligible(item, cfg, now):
+    """Re-run the allowlist for one previously listed item, without measuring sizes."""
+    return any(x['path'] == item['path'] and x['category'] == item['category']
+               for x in candidates(cfg, now, with_sizes=False))
+
+
+def _report(records, category, p, size, advice, label=None, **extra):
+    rec = {'category': category, 'path': str(p), 'bytes': size, 'policy': 'report_only', 'advice': advice}
+    if label:
+        rec['label'] = label
+    rec.update(extra)
+    records.append(rec)
 
 
 def reports(cfg):
@@ -161,7 +406,87 @@ def reports(cfg):
             if p.exists() and not p.is_symlink():
                 sz = size_bytes(p)
                 if group != 'application_support' or sz >= cfg['large_support_gb'] * 1e9:
-                    records.append({'category': group, 'path': str(p), 'bytes': sz, 'policy': 'report_only'})
+                    advice = ('Clear it from inside the app, not by deleting the folder.'
+                              if group == 'application_support' else 'Clear it from the browser or app settings.')
+                    _report(records, group, p, sz, advice)
+    # Big apps and games: only you know which ones you still use.
+    min_app = opt(cfg, 'large_app_gb') * 1e9
+    for apps in (APPLICATIONS, HOME / 'Applications'):
+        if not apps.is_dir():
+            continue
+        try:
+            entries = list(apps.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if p.name.startswith('.') or p.is_symlink() or not p.is_dir():
+                continue
+            size = du_bytes(p)
+            if size >= min_app:
+                _report(records, 'large_app', p, size,
+                        'Uninstall it if you no longer use it (drag to Trash or use its uninstaller).')
+    # App data only the app can clean safely.
+    library = HOME / 'Library'
+    min_data = opt(cfg, 'app_data_report_gb') * 1e9
+    for pattern, label, advice in APP_DATA_REPORTS:
+        for p in sorted(library.glob(pattern)):
+            if p.is_dir() and not p.is_symlink():
+                size = du_bytes(p)
+                if size >= min_data:
+                    _report(records, 'app_data', p, size, advice, label=label)
+    # iCloud leftovers: local copies macOS keeps after iCloud Drive is turned off or re-synced.
+    archive = HOME / 'iCloud Drive (Archive)'
+    if archive.is_dir() and not archive.is_symlink():
+        _report(records, 'icloud_archive', archive, du_bytes(archive),
+                'A local copy macOS made when iCloud Drive was turned off. Check the files are in iCloud, then delete what you no longer need.')
+    cloud = library / 'CloudStorage'
+    try:
+        cloud_entries = list(cloud.iterdir()) if cloud.is_dir() else []
+    except OSError:
+        cloud_entries = []
+    for p in cloud_entries:
+        if p.name.startswith('iCloudDrive-iCloudDrive (') and not p.is_symlink():
+            size = du_bytes(p)
+            if size >= 100 * 1024 ** 2:
+                _report(records, 'icloud_leftover', p, size,
+                        'Left over from an earlier iCloud Drive sync. Make sure iCloud Drive is fully synced, then restart; if it stays, remove it in Finder.')
+    # iPhone and iPad backups. Measuring them needs Full Disk Access.
+    backups = support / 'MobileSync' / 'Backup'
+    try:
+        has_backups = any(backups.iterdir())
+        size = du_bytes(backups) if has_backups else 0
+        if has_backups:
+            _report(records, 'ios_backups', backups, size,
+                    'Finder → your iPhone → Manage Backups, then delete old backups.')
+    except PermissionError:
+        _report(records, 'ios_backups', backups, 0,
+                'Could not measure without Full Disk Access. Check Finder → your iPhone → Manage Backups.',
+                size_known=False)
+    except OSError:
+        pass
+    # The same project copied to several places.
+    groups = {}
+    for project in find_projects(cfg):
+        key = None
+        try:
+            data = json.loads((project / 'package.json').read_text(encoding='utf-8'))
+            if isinstance(data, dict) and isinstance(data.get('name'), str):
+                key = data['name'].strip().lower()
+        except (OSError, ValueError):
+            pass
+        key = key or project.name.lower()
+        if len(key) >= 3 and key not in GENERIC_PROJECT_NAMES:
+            groups.setdefault(key, []).append(project)
+    for key, copies in groups.items():
+        if len(copies) < 2:
+            continue
+        for project in copies:
+            env = has_real_env(project)
+            touched = dt.datetime.fromtimestamp(project_last_touched(project)).strftime('%Y-%m-%d')
+            advice = (f'Same project ("{key}") found in {len(copies)} places. Keep the one you use; '
+                      'copy its .env files into it before deleting the others.')
+            _report(records, 'duplicate_project', project, du_bytes(project), advice,
+                    project_name=key, has_env=env, last_touched=touched)
     return sorted(records, key=lambda x: x['bytes'], reverse=True)
 
 
@@ -199,7 +524,8 @@ def native_ops(dry_run, approve, prune_days):
 
 
 def config_example():
-    return {'screenshot_days': 30, 'installer_days': 60, 'vscode_cache_days': 30, 'large_support_gb': 1, 'homebrew_prune_days': 30}
+    return {'screenshot_days': 30, 'installer_days': 60, 'vscode_cache_days': 30, 'large_support_gb': 1,
+            'homebrew_prune_days': 30, **OPTIONAL_DEFAULTS}
 
 
 def history_record(payload):
@@ -313,13 +639,19 @@ def main(argv=None):
         print(f' {i:3d}. [{c["category"]}] {mib(c["bytes"]):>12} {c["path"]}')
     print('\nREPORT-ONLY STORAGE (never removed by this tool):')
     for r in report:
-        print(f' [{r["category"]}] {mib(r["bytes"]):>12} {r["path"]}')
+        size = mib(r['bytes']) if r.get('size_known', True) else 'unknown'
+        env = ''
+        if r['category'] == 'duplicate_project':
+            env = f' (has .env: {"yes" if r["has_env"] else "no"}, last changed {r["last_touched"]})'
+        print(f' [{r.get("label", r["category"])}] {size:>12} {r["path"]}{env}')
+        print(f'      → {r["advice"]}')
     moved = []
     if args.action == 'execute':
         if not sys.stdin.isatty():
             print('REFUSED: execute requires an interactive terminal; scheduled tasks cannot delete.')
             return 2
         print('\nCAUTION: deleting a downloaded installer or cache can cause re-downloads.')
+        print('Quit an app before removing its cache. Run npm install in a project to restore node_modules.')
         for c in items:
             p = Path(c['path'])
             if c['requires_quit'] and app_running('Visual Studio Code|Code Helper'):
@@ -328,19 +660,9 @@ def main(argv=None):
             answer = input(f'Move to Trash? [{c["category"]}] {p.name} ({mib(c["bytes"])}) [y/N]: ').strip().lower()
             if answer != 'y':
                 continue
-            # Revalidate allowed paths and age after confirmation.
-            category = c['category']
-            parent = {'screenshots': HOME / 'Desktop', 'installers': HOME / 'Downloads',
-                      'vscode_updater': HOME / 'Library' / 'Caches',
-                      'vscode_vsix': HOME / 'Library' / 'Application Support' / 'Code' / 'CachedExtensionVSIXs'}[category]
-            if not safe_child(p, parent) or not older(p, c['age_days'], now):
+            # Re-run every allowlist rule (location, type, age, symlinks) after confirmation.
+            if not still_eligible(c, cfg, time.time()):
                 print(f'SKIP changed/unsafe: {p}')
-                continue
-            if category == 'screenshots' and not (p.is_file() and SCREENSHOT.fullmatch(p.name)):
-                continue
-            if category == 'installers' and not (p.is_file() and p.suffix.lower() in INSTALLERS):
-                continue
-            if category == 'vscode_vsix' and not (p.is_file() and p.suffix.lower() == '.vsix'):
                 continue
             try:
                 trash_with_finder(p)
