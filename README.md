@@ -19,7 +19,7 @@ Everything runs on your Mac. Tasks live in your existing iCloud Reminders, so ch
 - **Menu-bar icon** that shows live counts of open and overdue tasks.
 - **Today's Plan**: a date-sorted plan of your open tasks. If you set up an Apple Intelligence Shortcut, it can generate a written plan instead, but only after asking before it sends your task titles.
 - **Desktop Companion**: a small floating panel with your counts, your next task and quick actions.
-- **Review Cleanup**: lists old screenshots, installers and VS Code caches, all unchecked. Anything you pick goes to the Trash after a second confirmation. Nothing is permanently deleted.
+- **Review Cleanup**: lists app caches, old screenshots and installers, unfinished downloads, unused VS Code extensions and `node_modules` in idle projects, all unchecked. It also shows large apps, chat app data, iCloud leftovers and duplicate project copies with advice, but never removes those. Anything you pick goes to the Trash after a second confirmation. Nothing is permanently deleted.
 - **Mac Health**: a plain-language report on free space, memory, swap and the apps using the most memory.
 - **Duplicate protection**: it won't create a second incomplete reminder with the same title in the same list.
 - **URL scheme** that opens a specific tab: `open macaihub://overdue` (also `today`, `upcoming`, `nodue`, `completed`, `all`).
@@ -129,13 +129,38 @@ TASK-0001 | Review deployment | 2026-10-12 10:30 | OPEN
 
 Each `scan`/`execute` adds a row to `~/.mac-storage-manager/history.jsonl` (the file keeps at most 500 rows).
 
+**What it can move to Trash** (only after you approve each item, and only if the item still qualifies when it's moved):
+
+- Old screenshots on the Desktop and old installers in Downloads
+- VS Code updater files, cached `.vsix` installers, and extension versions VS Code no longer lists in `extensions.json`
+- App caches in `~/Library/Caches` (not Apple's, and not the browser or Spotify caches, which stay report-only). Quit the app first.
+- The npm download cache (`~/.npm/_cacache`)
+- Unfinished downloads (`.part`, `.crdownload`, `.download`) and zips whose unpacked folder is right next to them
+- `node_modules` in projects you haven't changed for a while. Source code and `.env` files are never listed; `npm install` restores the packages.
+
+**What it only reports, with advice:** large apps and games, WhatsApp, Telegram, Docker and Teams data, the `iCloud Drive (Archive)` copy and old iCloud sync folders, iPhone/iPad backups (measuring them needs Full Disk Access), and the same project found in several places, with whether each copy has a `.env` file.
+
+Projects are looked for in `~/Documents`, `~/Developer`, `~/Desktop`, `~/Projects`, `~/code` and `~/iCloud Drive (Archive)`, up to 5 folders deep. Nothing under `~/Library` is scanned for projects.
+
 ## Configuration
 
 | File | Used by | Settings |
 |------|---------|----------|
 | `hub_config.json` | `ai_hub.py` | Reminders list name and check-in times |
 | `productivity_config.json` | `productivity_manager.py` | Planning note title, Reminders list, prompt times |
-| `config.json` | `storage_manager.py` | Age thresholds for screenshots, installers, caches and Homebrew |
+| `config.json` | `storage_manager.py` | Age thresholds for screenshots, installers, caches and Homebrew, plus the optional cleanup settings below |
+
+Optional `config.json` settings for the storage cleaner (older config files work without them):
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `cache_min_mb` | 100 | Only list app caches at least this big |
+| `partial_download_days` | 2 | Unfinished downloads untouched for this many days |
+| `unpacked_zip_days` | 7 | Zips older than this whose folder is already unpacked |
+| `node_modules_days` | 30 | Projects unchanged for this many days |
+| `large_app_gb` | 2 | Report apps at least this big |
+| `app_data_report_gb` | 1 | Report chat and Docker data at least this big |
+| `project_roots` | see above | Folders inside your home folder to look for projects in |
 
 ## Project structure
 

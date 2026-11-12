@@ -53,6 +53,75 @@ class StorageManagerTests(unittest.TestCase):
                 mod.config_load(p)
 
 
+def _age(p, days):
+    t = time.time() - days * 86400
+    os.utime(p, (t, t))
+
+
+class DeeperCleanupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+        for p in (patch.object(mod, 'HOME', self.home), patch.object(mod, 'APPLICATIONS', self.home / 'NoApps')):
+            p.start(); self.addCleanup(p.stop)
+        self.cfg = mod.config_example(); self.cfg['cache_min_mb'] = 0
+
+    def cats(self):
+        return {(x['category'], Path(x['path']).name) for x in mod.candidates(self.cfg, time.time())}
+
+    def test_node_modules_only_in_idle_projects_and_source_kept_out(self):
+        for name, days in (('old', 90), ('fresh', 0)):
+            proj = self.home / 'Documents' / name
+            (proj / 'node_modules' / 'pkg').mkdir(parents=True)
+            for f in ('package.json', '.env.local'):
+                (proj / f).write_text('{}'); _age(proj / f, days)
+            _age(proj / 'node_modules', days); _age(proj, days)
+        found = [x for x in mod.candidates(self.cfg, time.time()) if x['category'] == 'node_modules']
+        self.assertEqual([Path(x['path']).parent.name for x in found], ['old'])
+        self.assertTrue(all(Path(x['path']).name == 'node_modules' for x in found))
+
+    def test_downloads_partial_and_unpacked_zip(self):
+        down = self.home / 'Downloads'; down.mkdir()
+        (down / 'movie.mp4.part').write_text('x'); _age(down / 'movie.mp4.part', 5)
+        (down / 'busy.crdownload').write_text('x')  # still downloading
+        (down / 'chat.zip').write_text('x'); _age(down / 'chat.zip', 30); (down / 'chat').mkdir()
+        (down / 'lonely.zip').write_text('x'); _age(down / 'lonely.zip', 30)
+        self.assertEqual(self.cats(), {('partial_download', 'movie.mp4.part'), ('unpacked_zip', 'chat.zip')})
+
+    def test_vscode_unused_extension_fails_closed(self):
+        ext = self.home / '.vscode' / 'extensions'
+        (ext / 'pub.tool-1.0.0').mkdir(parents=True); (ext / 'pub.tool-2.0.0').mkdir()
+        self.assertEqual(self.cats(), set())  # no extensions.json: nothing offered
+        (ext / 'extensions.json').write_text('[{"relativeLocation": "pub.tool-2.0.0"}]')
+        self.assertEqual(self.cats(), {('vscode_old_extension', 'pub.tool-1.0.0')})
+
+    def test_app_caches_skip_apple_and_report_only(self):
+        caches = self.home / 'Library' / 'Caches'
+        for n in ('com.example.app', 'com.apple.Safari', 'com.spotify.client'):
+            (caches / n).mkdir(parents=True); (caches / n / 'f').write_text('x')
+        self.assertEqual(self.cats(), {('app_cache', 'com.example.app')})
+
+    def test_still_eligible_rejects_changed_item(self):
+        down = self.home / 'Downloads'; down.mkdir()
+        part = down / 'a.part'; part.write_text('x'); _age(part, 5)
+        item = mod.candidates(self.cfg, time.time())[0]
+        self.assertTrue(mod.still_eligible(item, self.cfg, time.time()))
+        part.write_text('new')  # touched again: no longer stale
+        self.assertFalse(mod.still_eligible(item, self.cfg, time.time()))
+
+    def test_duplicate_projects_reported_with_env_flag(self):
+        for root, env in (('Documents', True), ('Developer', False)):
+            proj = self.home / root / 'shop'
+            proj.mkdir(parents=True)
+            (proj / 'package.json').write_text('{"name": "shop-site"}')
+            if env:
+                (proj / '.env.local').write_text('KEY=1')
+        dups = [r for r in mod.reports(self.cfg) if r['category'] == 'duplicate_project']
+        self.assertEqual(sorted(r['has_env'] for r in dups), [False, True])
+        self.assertEqual(mod.candidates(self.cfg, time.time()), [])  # never trash candidates
+
+
 class TrendHistoryTests(unittest.TestCase):
     def _payload(self, day, free):
         return {'date': f'2026-10-{day:02d}T00:00:00+00:00', 'mode': 'scan',
